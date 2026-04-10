@@ -27,7 +27,6 @@ wss.on('connection', (ws) => {
                     players[playerId] = { x: data.x, y: data.y, flip: false };
                     console.log('Игрок присоединился:', playerId);
                     
-                    // Отправляем новому игроку всех существующих
                     ws.send(JSON.stringify({
                         type: 'init',
                         players: players
@@ -40,7 +39,6 @@ wss.on('connection', (ws) => {
                         players[playerId].y = data.y;
                         players[playerId].flip = data.flip;
                         
-                        // Рассылаем всем остальным
                         wss.clients.forEach(client => {
                             if (client !== ws && client.readyState === WebSocket.OPEN) {
                                 client.send(JSON.stringify({
@@ -56,7 +54,7 @@ wss.on('connection', (ws) => {
                     break;
             }
         } catch(e) {
-            console.log('Ошибка парсинга:', e);
+            console.log('Ошибка:', e);
         }
     });
     
@@ -64,16 +62,6 @@ wss.on('connection', (ws) => {
         if (playerId) {
             delete players[playerId];
             console.log('Игрок отключился:', playerId);
-            
-            // Сообщаем всем об отключении
-            wss.clients.forEach(client => {
-                if (client.readyState === WebSocket.OPEN) {
-                    client.send(JSON.stringify({
-                        type: 'player_left',
-                        id: playerId
-                    }));
-                }
-            });
         }
     });
 });
