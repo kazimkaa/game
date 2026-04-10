@@ -14,23 +14,43 @@ app.get('/', (req, res) => {
 
 wss.on('connection', (ws) => {
     let playerId = null;
-    console.log('Новое подключение');
+    let playerNickname = null;
     
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
-            console.log('Получено:', data);
             
             switch(data.type) {
                 case 'join':
                     playerId = data.id;
-                    players[playerId] = { x: data.x, y: data.y, flip: false };
-                    console.log('Игрок присоединился:', playerId);
+                    playerNickname = data.nickname || "Игрок";
+                    players[playerId] = { 
+                        x: data.x, 
+                        y: data.y, 
+                        flip: false,
+                        nickname: playerNickname
+                    };
+                    console.log('Игрок присоединился:', playerId, playerNickname);
                     
+                    // Отправляем новому игроку всех существующих
                     ws.send(JSON.stringify({
                         type: 'init',
                         players: players
                     }));
+                    
+                    // Сообщаем всем остальным о новом игроке
+                    wss.clients.forEach(client => {
+                        if (client !== ws && client.readyState === WebSocket.OPEN) {
+                            client.send(JSON.stringify({
+                                type: 'player_joined',
+                                id: playerId,
+                                nickname: playerNickname,
+                                x: data.x,
+                                y: data.y,
+                                flip: false
+                            }));
+                        }
+                    });
                     break;
                     
                 case 'move':
@@ -62,6 +82,15 @@ wss.on('connection', (ws) => {
         if (playerId) {
             delete players[playerId];
             console.log('Игрок отключился:', playerId);
+            
+            wss.clients.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify({
+                        type: 'player_left',
+                        id: playerId
+                    }));
+                }
+            });
         }
     });
 });
