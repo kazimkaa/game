@@ -15,6 +15,7 @@ app.get('/', (req, res) => {
 wss.on('connection', (ws) => {
     let playerId = null;
     let playerNickname = null;
+    let playerCharacter = 1;
     
     ws.on('message', (message) => {
         try {
@@ -23,19 +24,32 @@ wss.on('connection', (ws) => {
             switch(data.type) {
                 case 'join':
                     playerId = data.id;
-                    playerNickname = data.nickname || "Игрок";
+                    playerNickname = data.nickname  "Игрок";
+                    playerCharacter = data.character  1;
+                    
                     players[playerId] = { 
                         x: data.x, 
                         y: data.y, 
                         flip: false,
-                        nickname: playerNickname
+                        nickname: playerNickname,
+                        character: playerCharacter
                     };
-                    console.log('Игрок присоединился:', playerId, playerNickname);
+                    console.log('Игрок присоединился:', playerId, playerNickname, 'персонаж:', playerCharacter);
                     
                     // Отправляем новому игроку всех существующих
+                    const playersData = {};
+                    for (let id in players) {
+                        playersData[id] = {
+                            nickname: players[id].nickname,
+                            character: players[id].character,
+                            x: players[id].x,
+                            y: players[id].y,
+                            flip: players[id].flip
+                        };
+                    }
                     ws.send(JSON.stringify({
                         type: 'init',
-                        players: players
+                        players: playersData
                     }));
                     
                     // Сообщаем всем остальным о новом игроке
@@ -45,6 +59,7 @@ wss.on('connection', (ws) => {
                                 type: 'player_joined',
                                 id: playerId,
                                 nickname: playerNickname,
+                                character: playerCharacter,
                                 x: data.x,
                                 y: data.y,
                                 flip: false
@@ -97,5 +112,5 @@ wss.on('connection', (ws) => {
 
 const PORT = process.env.PORT || 2567;
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Сервер на порту ${PORT}`);
+    console.log(Сервер на порту ${PORT});
 });
