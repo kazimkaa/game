@@ -24,8 +24,8 @@ wss.on('connection', (ws) => {
             switch(data.type) {
                 case 'join':
                     playerId = data.id;
-                    playerNickname = data.nickname  "Игрок";
-                    playerCharacter = data.character  1;
+                    playerNickname = data.nickname || "Игрок";
+                    playerCharacter = data.character || 1;
                     
                     players[playerId] = { 
                         x: data.x, 
@@ -34,7 +34,7 @@ wss.on('connection', (ws) => {
                         nickname: playerNickname,
                         character: playerCharacter
                     };
-                    console.log('Игрок присоединился:', playerId, playerNickname, 'персонаж:', playerCharacter);
+                    console.log("Игрок присоединился:", playerId, playerNickname, "персонаж:", playerCharacter);
                     
                     // Отправляем новому игроку всех существующих
                     const playersData = {};
@@ -89,14 +89,14 @@ wss.on('connection', (ws) => {
                     break;
             }
         } catch(e) {
-            console.log('Ошибка:', e);
+            console.log("Ошибка:", e);
         }
     });
     
     ws.on('close', () => {
         if (playerId) {
             delete players[playerId];
-            console.log('Игрок отключился:', playerId);
+            console.log("Игрок отключился:", playerId);
             
             wss.clients.forEach(client => {
                 if (client.readyState === WebSocket.OPEN) {
@@ -112,5 +112,5 @@ wss.on('connection', (ws) => {
 
 const PORT = process.env.PORT || 2567;
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(Сервер на порту ${PORT});
+    console.log(`Сервер на порту ${PORT}`);
 });
