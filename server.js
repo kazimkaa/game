@@ -9,7 +9,7 @@ const wss = new WebSocket.Server({ server });
 const players = {};
 
 app.get('/', (req, res) => {
-    res.send('WebSocket сервер работает!');
+    res.send('WebSocket server works!');
 });
 
 wss.on('connection', (ws) => {
@@ -24,7 +24,7 @@ wss.on('connection', (ws) => {
             switch(data.type) {
                 case 'join':
                     playerId = data.id;
-                    playerNickname = data.nickname || "Игрок";
+                    playerNickname = data.nickname || "Player";
                     playerCharacter = data.character || 1;
                     
                     players[playerId] = { 
@@ -34,9 +34,9 @@ wss.on('connection', (ws) => {
                         nickname: playerNickname,
                         character: playerCharacter
                     };
-                    console.log("Игрок присоединился:", playerId, playerNickname, "персонаж:", playerCharacter);
+                    console.log("Join:", playerId, playerNickname, "char:", playerCharacter);
                     
-                    // Отправляем новому игроку всех существующих
+                    // Send existing players to new player
                     const playersData = {};
                     for (let id in players) {
                         playersData[id] = {
@@ -52,7 +52,7 @@ wss.on('connection', (ws) => {
                         players: playersData
                     }));
                     
-                    // Сообщаем всем остальным о новом игроке
+                    // Broadcast new player to others
                     wss.clients.forEach(client => {
                         if (client !== ws && client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify({
@@ -89,14 +89,14 @@ wss.on('connection', (ws) => {
                     break;
             }
         } catch(e) {
-            console.log("Ошибка:", e);
+            console.log("Error:", e);
         }
     });
     
     ws.on('close', () => {
         if (playerId) {
             delete players[playerId];
-            console.log("Игрок отключился:", playerId);
+            console.log("Disconnect:", playerId);
             
             wss.clients.forEach(client => {
                 if (client.readyState === WebSocket.OPEN) {
@@ -112,5 +112,5 @@ wss.on('connection', (ws) => {
 
 const PORT = process.env.PORT || 2567;
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Сервер на порту ${PORT}`);
+    console.log(`Server on port ${PORT}`);
 });
