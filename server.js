@@ -28,6 +28,7 @@ wss.on('connection', (ws) => {
                     playerNickname = data.nickname || "Player";
                     playerCharacter = data.character || 1;
                     
+                    // СОХРАНЯЕМ ИГРОКА С ПЕРСОНАЖЕМ
                     players[playerId] = { 
                         x: data.x, 
                         y: data.y, 
@@ -36,7 +37,9 @@ wss.on('connection', (ws) => {
                         character: playerCharacter
                     };
                     console.log("Join:", playerId, playerNickname, "char:", playerCharacter);
+                    console.log("Players now:", Object.keys(players).length);
                     
+                    // Отправляем новому игроку всех существующих (с персонажами)
                     const playersData = {};
                     for (let id in players) {
                         playersData[id] = {
@@ -47,14 +50,16 @@ wss.on('connection', (ws) => {
                             flip: players[id].flip
                         };
                     }
+                    console.log("Sending init with players:", playersData);
                     ws.send(JSON.stringify({
                         type: 'init',
                         players: playersData
                     }));
                     
+                    // Оповещаем остальных о новом игроке
                     wss.clients.forEach(client => {
                         if (client !== ws && client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({
+                            const joinMsg = {
                                 type: 'player_joined',
                                 id: playerId,
                                 nickname: playerNickname,
@@ -62,7 +67,9 @@ wss.on('connection', (ws) => {
                                 x: data.x,
                                 y: data.y,
                                 flip: false
-                            }));
+                            };
+                            console.log("Broadcasting player_joined:", joinMsg);
+                            client.send(JSON.stringify(joinMsg));
                         }
                     });
                     break;
