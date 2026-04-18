@@ -26,7 +26,7 @@ wss.on('connection', (ws) => {
                 case 'join':
                     playerId = data.id;
                     playerNickname = data.nickname || "Player";
-                    playerCharacter = data.character || 2;
+                    playerCharacter = data.character || 1;
                     
                     players[playerId] = { 
                         x: data.x, 
@@ -48,7 +48,7 @@ wss.on('connection', (ws) => {
                             flip: players[id].flip
                         };
                     }
-                    console.log("Sending init to new player:", playersData);
+                    console.log("Sending init to new player:", JSON.stringify(playersData));
                     ws.send(JSON.stringify({
                         type: 'init',
                         players: playersData
@@ -66,7 +66,7 @@ wss.on('connection', (ws) => {
                                 y: data.y,
                                 flip: false
                             };
-                            console.log("Broadcasting to others:", joinMsg);
+                            console.log("Broadcasting to others:", JSON.stringify(joinMsg));
                             client.send(JSON.stringify(joinMsg));
                         }
                     });
