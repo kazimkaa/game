@@ -26,9 +26,8 @@ wss.on('connection', (ws) => {
                 case 'join':
                     playerId = data.id;
                     playerNickname = data.nickname || "Player";
-                    playerCharacter = data.character || 1;
+                    playerCharacter = data.character || 2;
                     
-                    // СОХРАНЯЕМ ИГРОКА С ПЕРСОНАЖЕМ
                     players[playerId] = { 
                         x: data.x, 
                         y: data.y, 
@@ -37,9 +36,8 @@ wss.on('connection', (ws) => {
                         character: playerCharacter
                     };
                     console.log("Join:", playerId, playerNickname, "char:", playerCharacter);
-                    console.log("Players now:", Object.keys(players).length);
                     
-                    // Отправляем новому игроку всех существующих (с персонажами)
+                    // Отправляем новому игроку всех существующих
                     const playersData = {};
                     for (let id in players) {
                         playersData[id] = {
@@ -50,7 +48,7 @@ wss.on('connection', (ws) => {
                             flip: players[id].flip
                         };
                     }
-                    console.log("Sending init with players:", playersData);
+                    console.log("Sending init to new player:", playersData);
                     ws.send(JSON.stringify({
                         type: 'init',
                         players: playersData
@@ -68,7 +66,7 @@ wss.on('connection', (ws) => {
                                 y: data.y,
                                 flip: false
                             };
-                            console.log("Broadcasting player_joined:", joinMsg);
+                            console.log("Broadcasting to others:", joinMsg);
                             client.send(JSON.stringify(joinMsg));
                         }
                     });
