@@ -24,22 +24,22 @@ wss.on('connection', (ws) => {
                 case 'join':
                     playerId = data.id;
                     
-                    // Сохраняем ВСЕ данные игрока
+                    // ✅ СОХРАНЯЕМ character
                     players[playerId] = { 
                         x: data.x, 
                         y: data.y, 
                         flip: data.flip || false,
                         nickname: data.nickname || "Player",
-                        character: data.character || 1
+                        character: data.character || 1  // ВАЖНО!
                     };
                     console.log(`✅ JOIN: ${playerId} | ${players[playerId].nickname} | Character: ${players[playerId].character}`);
                     
-                    // Отправляем новому игроку всех существующих (с их персонажами)
+                    // ✅ Отправляем ВСЕХ игроков с их character
                     const allPlayers = {};
                     for (let id in players) {
                         allPlayers[id] = {
                             nickname: players[id].nickname,
-                            character: players[id].character,
+                            character: players[id].character,  // ВАЖНО!
                             x: players[id].x,
                             y: players[id].y,
                             flip: players[id].flip
@@ -50,12 +50,12 @@ wss.on('connection', (ws) => {
                         players: allPlayers
                     }));
                     
-                    // Оповещаем остальных о новом игроке (с его персонажем)
+                    // ✅ Оповещаем остальных с character
                     const joinMsg = {
                         type: 'player_joined',
                         id: playerId,
                         nickname: players[playerId].nickname,
-                        character: players[playerId].character,
+                        character: players[playerId].character,  // ВАЖНО!
                         x: data.x,
                         y: data.y,
                         flip: data.flip || false
@@ -74,33 +74,14 @@ wss.on('connection', (ws) => {
                         players[playerId].y = data.y;
                         players[playerId].flip = data.flip;
                         
-                        const moveMsg = {
-                            type: 'player_moved',
-                            id: playerId,
-                            x: data.x,
-                            y: data.y,
-                            flip: data.flip
-                        };
-                        
                         wss.clients.forEach(client => {
                             if (client !== ws && client.readyState === WebSocket.OPEN) {
-                                client.send(JSON.stringify(moveMsg));
-                            }
-                        });
-                    }
-                    break;
-                    
-                case 'change_character':
-                    if (playerId && players[playerId]) {
-                        players[playerId].character = data.character;
-                        console.log(`🔄 ${playerId} changed character to ${data.character}`);
-                        
-                        wss.clients.forEach(client => {
-                            if (client.readyState === WebSocket.OPEN) {
                                 client.send(JSON.stringify({
-                                    type: 'character_changed',
+                                    type: 'player_moved',
                                     id: playerId,
-                                    character: data.character
+                                    x: data.x,
+                                    y: data.y,
+                                    flip: data.flip
                                 }));
                             }
                         });
