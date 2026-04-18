@@ -36,9 +36,8 @@ wss.on('connection', (ws) => {
                         character: playerCharacter
                     };
                     console.log("Join:", playerId, playerNickname, "char:", playerCharacter);
-                    console.log("Total players:", Object.keys(players).length);
                     
-                    // ОТПРАВЛЯЕМ ВСЕХ ИГРОКОВ НОВОМУ
+                    // Отправляем ВСЕХ игроков новому
                     const allPlayers = {};
                     for (let id in players) {
                         allPlayers[id] = {
@@ -49,13 +48,13 @@ wss.on('connection', (ws) => {
                             flip: players[id].flip
                         };
                     }
-                    console.log("Sending ALL players to new player:", JSON.stringify(allPlayers));
+                    console.log("Sending to new player:", JSON.stringify(allPlayers));
                     ws.send(JSON.stringify({
                         type: 'init',
                         players: allPlayers
                     }));
                     
-                    // ОПОВЕЩАЕМ ВСЕХ ОСТАЛЬНЫХ О НОВОМ ИГРОКЕ
+                    // Оповещаем остальных о новом игроке
                     const joinMsg = {
                         type: 'player_joined',
                         id: playerId,
@@ -65,7 +64,7 @@ wss.on('connection', (ws) => {
                         y: data.y,
                         flip: false
                     };
-                    console.log("Broadcasting to others:", JSON.stringify(joinMsg));
+                    console.log("Broadcasting:", JSON.stringify(joinMsg));
                     
                     wss.clients.forEach(client => {
                         if (client !== ws && client.readyState === WebSocket.OPEN) {
@@ -103,7 +102,6 @@ wss.on('connection', (ws) => {
         if (playerId) {
             delete players[playerId];
             console.log("Disconnect:", playerId);
-            console.log("Players left:", Object.keys(players).length);
             
             wss.clients.forEach(client => {
                 if (client.readyState === WebSocket.OPEN) {
