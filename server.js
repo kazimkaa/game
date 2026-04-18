@@ -20,6 +20,7 @@ wss.on('connection', (ws) => {
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
+            console.log("Received:", data);
             
             switch(data.type) {
                 case 'join':
@@ -36,7 +37,6 @@ wss.on('connection', (ws) => {
                     };
                     console.log("Join:", playerId, playerNickname, "char:", playerCharacter);
                     
-                    // Send existing players to new player
                     const playersData = {};
                     for (let id in players) {
                         playersData[id] = {
@@ -52,7 +52,6 @@ wss.on('connection', (ws) => {
                         players: playersData
                     }));
                     
-                    // Broadcast new player to others
                     wss.clients.forEach(client => {
                         if (client !== ws && client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify({
