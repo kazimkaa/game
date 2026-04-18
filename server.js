@@ -24,22 +24,22 @@ wss.on('connection', (ws) => {
                 case 'join':
                     playerId = data.id;
                     
-                    // ✅ СОХРАНЯЕМ character
+                    // Сохраняем игрока с персонажем
                     players[playerId] = { 
                         x: data.x, 
                         y: data.y, 
                         flip: data.flip || false,
                         nickname: data.nickname || "Player",
-                        character: data.character || 1  // ВАЖНО!
+                        character: data.character
                     };
-                    console.log(`✅ JOIN: ${playerId} | ${players[playerId].nickname} | Character: ${players[playerId].character}`);
+                    console.log(`Player joined: ${playerId}, character: ${players[playerId].character}`);
                     
-                    // ✅ Отправляем ВСЕХ игроков с их character
+                    // Отправляем новому игроку всех существующих
                     const allPlayers = {};
                     for (let id in players) {
                         allPlayers[id] = {
                             nickname: players[id].nickname,
-                            character: players[id].character,  // ВАЖНО!
+                            character: players[id].character,
                             x: players[id].x,
                             y: players[id].y,
                             flip: players[id].flip
@@ -50,31 +50,30 @@ wss.on('connection', (ws) => {
                         players: allPlayers
                     }));
                     
-                    // ✅ Оповещаем остальных с character
-                    const joinMsg = {
-                        type: 'player_joined',
-                        id: playerId,
-                        nickname: players[playerId].nickname,
-                        character: players[playerId].character,  // ВАЖНО!
-                        x: data.x,
-                        y: data.y,
-                        flip: data.flip || false
-                    };
-                    
-                    wss.clients.forEach(client => {
+                    // Оповещаем всех остальных о новом игроке
+                    for (let client of wss.clients) {
                         if (client !== ws && client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify(joinMsg));
+                            client.send(JSON.stringify({
+                                type: 'player_joined',
+                                id: playerId,
+                                nickname: players[playerId].nickname,
+                                character: players[playerId].character,
+                                x: data.x,
+                                y: data.y,
+                                flip: false
+                            }));
                         }
-                    });
+                    }
                     break;
                     
                 case 'move':
-                    if (playerId && players[playerId]) {
+                    if (players[playerId]) {
                         players[playerId].x = data.x;
                         players[playerId].y = data.y;
                         players[playerId].flip = data.flip;
                         
-                        wss.clients.forEach(client => {
+                        // Рассылаем движение всем кроме отправителя
+                        for (let client of wss.clients) {
                             if (client !== ws && client.readyState === WebSocket.OPEN) {
                                 client.send(JSON.stringify({
                                     type: 'player_moved',
@@ -84,33 +83,33 @@ wss.on('connection', (ws) => {
                                     flip: data.flip
                                 }));
                             }
-                        });
+                        }
                     }
                     break;
             }
         } catch(e) {
-            console.log("❌ Error:", e.message);
+            console.log("Error:", e);
         }
     });
     
     ws.on('close', () => {
         if (playerId) {
             delete players[playerId];
-            console.log(`❌ DISCONNECT: ${playerId}`);
+            console.log(`Player left: ${playerId}`);
             
-            wss.clients.forEach(client => {
+            for (let client of wss.clients) {
                 if (client.readyState === WebSocket.OPEN) {
                     client.send(JSON.stringify({
                         type: 'player_left',
                         id: playerId
                     }));
                 }
-            });
+            }
         }
     });
 });
 
 const PORT = process.env.PORT || 2567;
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
