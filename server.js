@@ -38,10 +38,10 @@ wss.on('connection', (ws) => {
                     console.log("Join:", playerId, playerNickname, "char:", playerCharacter);
                     console.log("Total players:", Object.keys(players).length);
                     
-                    // Отправляем новому игроку ВСЕХ существующих игроков
-                    const playersData = {};
+                    // ОТПРАВЛЯЕМ ВСЕХ ИГРОКОВ НОВОМУ
+                    const allPlayers = {};
                     for (let id in players) {
-                        playersData[id] = {
+                        allPlayers[id] = {
                             nickname: players[id].nickname,
                             character: players[id].character,
                             x: players[id].x,
@@ -49,25 +49,26 @@ wss.on('connection', (ws) => {
                             flip: players[id].flip
                         };
                     }
-                    console.log("Sending init to new player (ALL PLAYERS):", JSON.stringify(playersData));
+                    console.log("Sending ALL players to new player:", JSON.stringify(allPlayers));
                     ws.send(JSON.stringify({
                         type: 'init',
-                        players: playersData
+                        players: allPlayers
                     }));
                     
-                    // Оповещаем остальных о новом игроке
+                    // ОПОВЕЩАЕМ ВСЕХ ОСТАЛЬНЫХ О НОВОМ ИГРОКЕ
+                    const joinMsg = {
+                        type: 'player_joined',
+                        id: playerId,
+                        nickname: playerNickname,
+                        character: playerCharacter,
+                        x: data.x,
+                        y: data.y,
+                        flip: false
+                    };
+                    console.log("Broadcasting to others:", JSON.stringify(joinMsg));
+                    
                     wss.clients.forEach(client => {
                         if (client !== ws && client.readyState === WebSocket.OPEN) {
-                            const joinMsg = {
-                                type: 'player_joined',
-                                id: playerId,
-                                nickname: playerNickname,
-                                character: playerCharacter,
-                                x: data.x,
-                                y: data.y,
-                                flip: false
-                            };
-                            console.log("Broadcasting to others:", JSON.stringify(joinMsg));
                             client.send(JSON.stringify(joinMsg));
                         }
                     });
@@ -102,7 +103,7 @@ wss.on('connection', (ws) => {
         if (playerId) {
             delete players[playerId];
             console.log("Disconnect:", playerId);
-            console.log("Total players left:", Object.keys(players).length);
+            console.log("Players left:", Object.keys(players).length);
             
             wss.clients.forEach(client => {
                 if (client.readyState === WebSocket.OPEN) {
