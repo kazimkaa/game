@@ -33,7 +33,6 @@ wss.on('connection', (ws) => {
                     };
                     console.log(`Player joined: ${playerId} (${players[playerId].nickname})`);
                     
-                    // Отправляем новому игроку всех существующих игроков
                     const allPlayers = {};
                     for (let id in players) {
                         if (id != playerId) {
@@ -52,20 +51,17 @@ wss.on('connection', (ws) => {
                         players: allPlayers
                     }));
                     
-                    // Рассылаем ВСЕМ клиентам (включая нового) о подключении
-                    const joinMessage = JSON.stringify({
-                        type: 'player_joined',
-                        id: playerId,
-                        nickname: players[playerId].nickname,
-                        character: players[playerId].character,
-                        x: data.x,
-                        y: data.y,
-                        flip: false
-                    });
-                    
                     for (let client of wss.clients) {
-                        if (client.readyState === WebSocket.OPEN) {
-                            client.send(joinMessage);
+                        if (client !== ws && client.readyState === WebSocket.OPEN) {
+                            client.send(JSON.stringify({
+                                type: 'player_joined',
+                                id: playerId,
+                                nickname: players[playerId].nickname,
+                                character: players[playerId].character,
+                                x: data.x,
+                                y: data.y,
+                                flip: false
+                            }));
                         }
                     }
                     break;
@@ -76,17 +72,15 @@ wss.on('connection', (ws) => {
                         players[playerId].y = data.y;
                         players[playerId].flip = data.flip;
                         
-                        const moveMessage = JSON.stringify({
-                            type: 'player_moved',
-                            id: playerId,
-                            x: data.x,
-                            y: data.y,
-                            flip: data.flip
-                        });
-                        
                         for (let client of wss.clients) {
                             if (client !== ws && client.readyState === WebSocket.OPEN) {
-                                client.send(moveMessage);
+                                client.send(JSON.stringify({
+                                    type: 'player_moved',
+                                    id: playerId,
+                                    x: data.x,
+                                    y: data.y,
+                                    flip: data.flip
+                                }));
                             }
                         }
                     }
@@ -98,15 +92,13 @@ wss.on('connection', (ws) => {
                     
                     console.log(`Chat: ${chatNickname}: ${chatMessage}`);
                     
-                    const chatResponse = JSON.stringify({
-                        type: 'chat',
-                        nickname: chatNickname,
-                        message: chatMessage
-                    });
-                    
                     for (let client of wss.clients) {
                         if (client.readyState === WebSocket.OPEN) {
-                            client.send(chatResponse);
+                            client.send(JSON.stringify({
+                                type: 'chat',
+                                nickname: chatNickname,
+                                message: chatMessage
+                            }));
                         }
                     }
                     break;
@@ -123,15 +115,13 @@ wss.on('connection', (ws) => {
             
             delete players[playerId];
             
-            const leaveMessage = JSON.stringify({
-                type: 'player_left',
-                id: playerId,
-                nickname: playerNickname
-            });
-            
             for (let client of wss.clients) {
                 if (client.readyState === WebSocket.OPEN) {
-                    client.send(leaveMessage);
+                    client.send(JSON.stringify({
+                        type: 'player_left',
+                        id: playerId,
+                        nickname: playerNickname
+                    }));
                 }
             }
         }
