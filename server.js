@@ -87,7 +87,7 @@ wss.on('connection', (ws) => {
                     }
                     break;
                 
-                // НОВЫЙ ОБРАБОТЧИК ДЛЯ ЧАТА
+                // ОБРАБОТЧИК ДЛЯ ЧАТА
                 case 'chat':
                     const chatMessage = data.message;
                     const chatNickname = data.nickname;
@@ -112,15 +112,20 @@ wss.on('connection', (ws) => {
     });
     
     ws.on('close', () => {
-        if (playerId) {
-            delete players[playerId];
-            console.log(`Player left: ${playerId}`);
+        if (playerId && players[playerId]) {
+            const playerNickname = players[playerId].nickname;
+            console.log(`Player left: ${playerId} (${playerNickname})`);
             
+            // Удаляем игрока
+            delete players[playerId];
+            
+            // Рассылаем всем о выходе игрока с его ником
             for (let client of wss.clients) {
                 if (client.readyState === WebSocket.OPEN) {
                     client.send(JSON.stringify({
                         type: 'player_left',
-                        id: playerId
+                        id: playerId,
+                        nickname: playerNickname
                     }));
                 }
             }
