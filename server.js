@@ -86,6 +86,25 @@ wss.on('connection', (ws) => {
                         }
                     }
                     break;
+                
+                // НОВЫЙ ОБРАБОТЧИК ДЛЯ ЧАТА
+                case 'chat':
+                    const chatMessage = data.message;
+                    const chatNickname = data.nickname;
+                    
+                    console.log(`Chat: ${chatNickname}: ${chatMessage}`);
+                    
+                    // Рассылаем сообщение ВСЕМ клиентам (включая отправителя)
+                    for (let client of wss.clients) {
+                        if (client.readyState === WebSocket.OPEN) {
+                            client.send(JSON.stringify({
+                                type: 'chat',
+                                nickname: chatNickname,
+                                message: chatMessage
+                            }));
+                        }
+                    }
+                    break;
             }
         } catch(e) {
             console.log("Error:", e);
