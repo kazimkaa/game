@@ -24,7 +24,7 @@ wss.on('connection', (ws) => {
                 case 'join':
                     playerId = data.id;
                     
-                    // Сохраняем игрока с персонажем
+                    // Сохраняем игрока
                     players[playerId] = { 
                         x: data.x, 
                         y: data.y, 
@@ -32,7 +32,7 @@ wss.on('connection', (ws) => {
                         nickname: data.nickname || "Player",
                         character: data.character
                     };
-                    console.log(`Player joined: ${playerId}, character: ${players[playerId].character}`);
+                    console.log(`Player joined: ${playerId} (${players[playerId].nickname})`);
                     
                     // Отправляем новому игроку всех существующих
                     const allPlayers = {};
@@ -50,17 +50,7 @@ wss.on('connection', (ws) => {
                         players: allPlayers
                     }));
                     
-                    // Оповещаем ВСЕХ (включая нового игрока) о подключении
-                    for (let client of wss.clients) {
-                        if (client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({
-                                type: 'system_message',
-                                message: `[Cristal Server] Игрок ${players[playerId].nickname} присоединился!`
-                            }));
-                        }
-                    }
-                    
-                    // Оповещаем всех остальных о новом игроке (для спавна)
+                    // Оповещаем ВСЕХ остальных о новом игроке
                     for (let client of wss.clients) {
                         if (client !== ws && client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify({
@@ -82,7 +72,6 @@ wss.on('connection', (ws) => {
                         players[playerId].y = data.y;
                         players[playerId].flip = data.flip;
                         
-                        // Рассылаем движение всем кроме отправителя
                         for (let client of wss.clients) {
                             if (client !== ws && client.readyState === WebSocket.OPEN) {
                                 client.send(JSON.stringify({
@@ -97,14 +86,12 @@ wss.on('connection', (ws) => {
                     }
                     break;
                 
-                // ОБРАБОТЧИК ДЛЯ ЧАТА
                 case 'chat':
                     const chatMessage = data.message;
                     const chatNickname = data.nickname;
                     
                     console.log(`Chat: ${chatNickname}: ${chatMessage}`);
                     
-                    // Рассылаем сообщение ВСЕМ клиентам (включая отправителя)
                     for (let client of wss.clients) {
                         if (client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify({
@@ -129,14 +116,9 @@ wss.on('connection', (ws) => {
             // Удаляем игрока
             delete players[playerId];
             
-            // Рассылаем всем о выходе игрока
+            // Рассылаем ТОЛЬКО player_left (без system_message)
             for (let client of wss.clients) {
                 if (client.readyState === WebSocket.OPEN) {
-                    client.send(JSON.stringify({
-                        type: 'system_message',
-                        message: `[Cristal Server] Игрок ${playerNickname} вышел из игры!`
-                    }));
-                    
                     client.send(JSON.stringify({
                         type: 'player_left',
                         id: playerId,
