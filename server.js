@@ -33,7 +33,7 @@ wss.on('connection', (ws) => {
                     };
                     console.log(`Player joined: ${playerId} (${players[playerId].nickname})`);
                     
-                    // Отправляем новому игроку всех существующих (без себя)
+                    // Отправляем новому игроку всех существующих игроков
                     const allPlayers = {};
                     for (let id in players) {
                         if (id != playerId) {
@@ -46,13 +46,14 @@ wss.on('connection', (ws) => {
                             };
                         }
                     }
+                    
                     ws.send(JSON.stringify({
                         type: 'init',
                         players: allPlayers
                     }));
                     
-                    // Отправляем самому новому игроку сообщение о себе
-                    ws.send(JSON.stringify({
+                    // Рассылаем ВСЕМ клиентам (включая нового) о подключении
+                    const joinMessage = JSON.stringify({
                         type: 'player_joined',
                         id: playerId,
                         nickname: players[playerId].nickname,
@@ -60,20 +61,11 @@ wss.on('connection', (ws) => {
                         x: data.x,
                         y: data.y,
                         flip: false
-                    }));
+                    });
                     
-                    // Оповещаем всех остальных о новом игроке
                     for (let client of wss.clients) {
-                        if (client !== ws && client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({
-                                type: 'player_joined',
-                                id: playerId,
-                                nickname: players[playerId].nickname,
-                                character: players[playerId].character,
-                                x: data.x,
-                                y: data.y,
-                                flip: false
-                            }));
+                        if (client.readyState === WebSocket.OPEN) {
+                            client.send(joinMessage);
                         }
                     }
                     break;
@@ -84,15 +76,17 @@ wss.on('connection', (ws) => {
                         players[playerId].y = data.y;
                         players[playerId].flip = data.flip;
                         
+                        const moveMessage = JSON.stringify({
+                            type: 'player_moved',
+                            id: playerId,
+                            x: data.x,
+                            y: data.y,
+                            flip: data.flip
+                        });
+                        
                         for (let client of wss.clients) {
                             if (client !== ws && client.readyState === WebSocket.OPEN) {
-                                client.send(JSON.stringify({
-                                    type: 'player_moved',
-                                    id: playerId,
-                                    x: data.x,
-                                    y: data.y,
-                                    flip: data.flip
-                                }));
+                                client.send(moveMessage);
                             }
                         }
                     }
@@ -104,13 +98,15 @@ wss.on('connection', (ws) => {
                     
                     console.log(`Chat: ${chatNickname}: ${chatMessage}`);
                     
+                    const chatResponse = JSON.stringify({
+                        type: 'chat',
+                        nickname: chatNickname,
+                        message: chatMessage
+                    });
+                    
                     for (let client of wss.clients) {
                         if (client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({
-                                type: 'chat',
-                                nickname: chatNickname,
-                                message: chatMessage
-                            }));
+                            client.send(chatResponse);
                         }
                     }
                     break;
@@ -127,13 +123,15 @@ wss.on('connection', (ws) => {
             
             delete players[playerId];
             
+            const leaveMessage = JSON.stringify({
+                type: 'player_left',
+                id: playerId,
+                nickname: playerNickname
+            });
+            
             for (let client of wss.clients) {
                 if (client.readyState === WebSocket.OPEN) {
-                    client.send(JSON.stringify({
-                        type: 'player_left',
-                        id: playerId,
-                        nickname: playerNickname
-                    }));
+                    client.send(leaveMessage);
                 }
             }
         }
