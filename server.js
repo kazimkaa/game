@@ -7,8 +7,6 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const players = {};
-// Сохраняем соответствие старый ID -> новый ID
-const playerMapping = {};
 
 app.get('/', (req, res) => {
     res.send('WebSocket server works!');
@@ -26,32 +24,6 @@ wss.on('connection', (ws) => {
                 case 'join':
                     playerId = data.id;
                     
-                    // Проверяем, есть ли игрок с таким же ником
-                    let oldId = null;
-                    for (let id in players) {
-                        if (players[id].nickname === data.nickname) {
-                            oldId = id;
-                            break;
-                        }
-                    }
-                    
-                    // Удаляем старого игрока с таким же ником
-                    if (oldId) {
-                        console.log(`Удаляю старого игрока: ${oldId} (${players[oldId].nickname})`);
-                        delete players[oldId];
-                        
-                        // Оповещаем всех о выходе старого игрока
-                        for (let client of wss.clients) {
-                            if (client.readyState === WebSocket.OPEN) {
-                                client.send(JSON.stringify({
-                                    type: 'player_left',
-                                    id: oldId,
-                                    nickname: data.nickname
-                                }));
-                            }
-                        }
-                    }
-                    
                     players[playerId] = { 
                         x: data.x, 
                         y: data.y, 
@@ -60,19 +32,18 @@ wss.on('connection', (ws) => {
                         character: data.character
                     };
                     console.log(`Player joined: ${playerId} (${players[playerId].nickname})`);
+                    console.log(`Всего игроков: ${Object.keys(players).length}`);
                     
-                    // Отправляем новому игроку всех существующих (ИСКЛЮЧАЯ себя)
+                    // Отправляем новому игроку всех существующих игроков (ВКЛЮЧАЯ себя?)
                     const allPlayers = {};
                     for (let id in players) {
-                        if (id !== playerId) {
-                            allPlayers[id] = {
-                                nickname: players[id].nickname,
-                                character: players[id].character,
-                                x: players[id].x,
-                                y: players[id].y,
-                                flip: players[id].flip
-                            };
-                        }
+                        allPlayers[id] = {
+                            nickname: players[id].nickname,
+                            character: players[id].character,
+                            x: players[id].x,
+                            y: players[id].y,
+                            flip: players[id].flip
+                        };
                     }
                     
                     ws.send(JSON.stringify({
@@ -80,7 +51,7 @@ wss.on('connection', (ws) => {
                         players: allPlayers
                     }));
                     
-                    // Оповещаем ВСЕХ ДРУГИХ игроков о новом
+                    // Оповещаем ВСЕХ других игроков о новом игроке
                     for (let client of wss.clients) {
                         if (client !== ws && client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify({
