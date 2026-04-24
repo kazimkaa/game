@@ -7,6 +7,8 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const players = {};
+// Сохраняем соответствие старый ID -> новый ID
+const playerMapping = {};
 
 app.get('/', (req, res) => {
     res.send('WebSocket server works!');
@@ -24,9 +26,30 @@ wss.on('connection', (ws) => {
                 case 'join':
                     playerId = data.id;
                     
-                    // Проверяем, существует ли уже игрок с таким ID
-                    if (players[playerId]) {
-                        console.log(`Игрок ${playerId} уже существует, обновляем данные`);
+                    // Проверяем, есть ли игрок с таким же ником
+                    let oldId = null;
+                    for (let id in players) {
+                        if (players[id].nickname === data.nickname) {
+                            oldId = id;
+                            break;
+                        }
+                    }
+                    
+                    // Удаляем старого игрока с таким же ником
+                    if (oldId) {
+                        console.log(`Удаляю старого игрока: ${oldId} (${players[oldId].nickname})`);
+                        delete players[oldId];
+                        
+                        // Оповещаем всех о выходе старого игрока
+                        for (let client of wss.clients) {
+                            if (client.readyState === WebSocket.OPEN) {
+                                client.send(JSON.stringify({
+                                    type: 'player_left',
+                                    id: oldId,
+                                    nickname: data.nickname
+                                }));
+                            }
+                        }
                     }
                     
                     players[playerId] = { 
@@ -57,7 +80,7 @@ wss.on('connection', (ws) => {
                         players: allPlayers
                     }));
                     
-                    // Оповещаем ВСЕХ ДРУГИХ игроков о новом (НО НЕ нового игрока)
+                    // Оповещаем ВСЕХ ДРУГИХ игроков о новом
                     for (let client of wss.clients) {
                         if (client !== ws && client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify({
