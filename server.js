@@ -24,6 +24,11 @@ wss.on('connection', (ws) => {
                 case 'join':
                     playerId = data.id;
                     
+                    // Проверяем, существует ли уже игрок с таким ID
+                    if (players[playerId]) {
+                        console.log(`Игрок ${playerId} уже существует, обновляем данные`);
+                    }
+                    
                     players[playerId] = { 
                         x: data.x, 
                         y: data.y, 
@@ -33,9 +38,10 @@ wss.on('connection', (ws) => {
                     };
                     console.log(`Player joined: ${playerId} (${players[playerId].nickname})`);
                     
+                    // Отправляем новому игроку всех существующих (ИСКЛЮЧАЯ себя)
                     const allPlayers = {};
                     for (let id in players) {
-                        if (id != playerId) {
+                        if (id !== playerId) {
                             allPlayers[id] = {
                                 nickname: players[id].nickname,
                                 character: players[id].character,
@@ -51,6 +57,7 @@ wss.on('connection', (ws) => {
                         players: allPlayers
                     }));
                     
+                    // Оповещаем ВСЕХ ДРУГИХ игроков о новом (НО НЕ нового игрока)
                     for (let client of wss.clients) {
                         if (client !== ws && client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify({
