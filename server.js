@@ -29,21 +29,23 @@ wss.on('connection', (ws) => {
                         y: data.y, 
                         flip: data.flip || false,
                         nickname: data.nickname || "Player",
-                        character: data.character
+                        character: data.character,
+                        hp: 100
                     };
                     console.log(`Player joined: ${playerId} (${players[playerId].nickname})`);
-                    console.log(`Всего игроков: ${Object.keys(players).length}`);
                     
-                    // Отправляем новому игроку всех существующих игроков (ВКЛЮЧАЯ себя?)
+                    // Отправляем новому игроку всех существующих
                     const allPlayers = {};
                     for (let id in players) {
-                        allPlayers[id] = {
-                            nickname: players[id].nickname,
-                            character: players[id].character,
-                            x: players[id].x,
-                            y: players[id].y,
-                            flip: players[id].flip
-                        };
+                        if (id !== playerId) {
+                            allPlayers[id] = {
+                                nickname: players[id].nickname,
+                                character: players[id].character,
+                                x: players[id].x,
+                                y: players[id].y,
+                                flip: players[id].flip
+                            };
+                        }
                     }
                     
                     ws.send(JSON.stringify({
@@ -51,7 +53,7 @@ wss.on('connection', (ws) => {
                         players: allPlayers
                     }));
                     
-                    // Оповещаем ВСЕХ других игроков о новом игроке
+                    // Оповещаем всех остальных о новом игроке
                     for (let client of wss.clients) {
                         if (client !== ws && client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify({
@@ -99,6 +101,52 @@ wss.on('connection', (ws) => {
                                 type: 'chat',
                                 nickname: chatNickname,
                                 message: chatMessage
+                            }));
+                        }
+                    }
+                    break;
+                
+                // НОВЫЙ ОБРАБОТЧИК ДЛЯ УРОНА
+                case 'damage':
+                    const targetId = data.target_id;
+                    const damage = data.damage;
+                    const attackerId = data.attacker_id;
+                    
+                    console.log(`Damage: ${attackerId} нанес урон ${damage} игроку ${targetId}`);
+                    
+                    // Обновляем HP на сервере
+                    if (players[targetId]) {
+                        players[targetId].hp = (players[targetId].hp || 100) - damage;
+                        console.log(`HP игрока ${targetId}: ${players[targetId].hp}`);
+                    }
+                    
+                    // Рассылаем урон всем игрокам
+                    for (let client of wss.clients) {
+                        if (client.readyState === WebSocket.OPEN) {
+                            client.send(JSON.stringify({
+                                type: 'damage',
+                                target_id: targetId,
+                                damage: damage,
+                                attacker_id: attackerId
+                            }));
+                        }
+                    }
+                    break;
+                
+                // НОВЫЙ ОБРАБОТЧИК ДЛЯ СМЕРТИ
+                case 'death':
+                    const deadId = data.id;
+                    console.log(`Death: ${deadId}`);
+                    
+                    // Удаляем игрока из списка
+                    delete players[deadId];
+                    
+                    // Рассылаем смерть всем
+                    for (let client of wss.clients) {
+                        if (client.readyState === WebSocket.OPEN) {
+                            client.send(JSON.stringify({
+                                type: 'death',
+                                id: deadId
                             }));
                         }
                     }
