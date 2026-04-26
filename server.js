@@ -7,46 +7,27 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const players = {};
-const lobbies = {};
 
 app.get('/', (req, res) => {
     res.send('WebSocket server works!');
 });
 
-// Функция очистки старых игроков (по времени)
+// Функция очистки старых игроков
 function clearOldPlayers() {
     const now = Date.now();
     let removed = 0;
     
     for (let id in players) {
-        if (players[id].timestamp && (now - players[id].timestamp > 30000)) {
-            console.log(`🗑️ Удаляю старого игрока: ${id} (${players[id].nickname})`);
-            
-            for (let client of wss.clients) {
-                if (client.readyState === WebSocket.OPEN) {
-                    client.send(JSON.stringify({
-                        type: 'player_left',
-                        id: id,
-                        nickname: players[id].nickname
-                    }));
-                }
-            }
-            
+        if (players[id].timestamp && (now - players[id].timestamp > 60000)) {
+            console.log(`🗑️ Удаляю: ${id} (${players[id].nickname})`);
             delete players[id];
             removed++;
         }
     }
-    
-    if (removed > 0) {
-        console.log(`✨ Очистка завершена. Удалено: ${removed} игроков`);
-    }
-    return removed;
+    if (removed > 0) console.log(`✨ Удалено: ${removed} игроков`);
 }
 
-// Запускаем очистку каждые 10 секунд
-setInterval(() => {
-    clearOldPlayers();
-}, 10000);
+setInterval(clearOldPlayers, 30000);
 
 wss.on('connection', (ws) => {
     let playerId = null;
@@ -54,7 +35,7 @@ wss.on('connection', (ws) => {
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
-            console.log("Received:", data);
+            console.log("Received:", data.type, data.id);
             
             switch(data.type) {
                 case 'join':
@@ -68,15 +49,15 @@ wss.on('connection', (ws) => {
                         character: data.character,
                         hp: 100,
                         timestamp: Date.now(),
-                        status: "in_lobby"
+                        status: "lobby"
                     };
-                    console.log(`✅ Player joined: ${playerId} (${players[playerId].nickname}) в лобби`);
+                    console.log(`✅ ${players[playerId].nickname} в ЛОББИ (${playerId})`);
                     
-                    // Отправляем новому игроку всех существующих (кроме игроков в игре)
-                    const allPlayers = {};
+                    // Отправляем ТОЛЬКО игроков которые в лобби
+                    const lobbyPlayers = {};
                     for (let id in players) {
-                        if (id !== playerId && players[id].status !== "in_game") {
-                            allPlayers[id] = {
+                        if (id !== playerId && players[id].status === "lobby") {
+                            lobbyPlayers[id] = {
                                 nickname: players[id].nickname,
                                 character: players[id].character,
                                 x: players[id].x,
@@ -89,21 +70,24 @@ wss.on('connection', (ws) => {
                     
                     ws.send(JSON.stringify({
                         type: 'init',
-                        players: allPlayers
+                        players: lobbyPlayers
                     }));
                     
-                    // Оповещаем всех остальных о новом игроке
+                    // Оповещаем только тех кто в лобби о новом игроке
                     for (let client of wss.clients) {
-                        if (client !== ws && client.readyState === WebSocket.OPEN && players[playerId].status !== "in_game") {
-                            client.send(JSON.stringify({
-                                type: 'player_joined',
-                                id: playerId,
-                                nickname: players[playerId].nickname,
-                                character: players[playerId].character,
-                                x: data.x,
-                                y: data.y,
-                                flip: false
-                            }));
+                        if (client !== ws && client.readyState === WebSocket.OPEN) {
+                            const p = players[playerId];
+                            if (p && p.status === "lobby") {
+                                client.send(JSON.stringify({
+                                    type: 'player_joined',
+                                    id: playerId,
+                                    nickname: p.nickname,
+                                    character: p.character,
+                                    x: data.x,
+                                    y: data.y,
+                                    flip: false
+                                }));
+                            }
                         }
                     }
                     break;
@@ -115,118 +99,90 @@ wss.on('connection', (ws) => {
                         players[playerId].flip = data.flip;
                         players[playerId].timestamp = Date.now();
                         
+                        // Рассылаем движение только тем кто в лобби
                         for (let client of wss.clients) {
                             if (client !== ws && client.readyState === WebSocket.OPEN) {
-                                client.send(JSON.stringify({
-                                    type: 'player_moved',
-                                    id: playerId,
-                                    x: data.x,
-                                    y: data.y,
-                                    flip: data.flip
-                                }));
+                                const targetPlayer = players[playerId];
+                                if (targetPlayer && targetPlayer.status === "lobby") {
+                                    client.send(JSON.stringify({
+                                        type: 'player_moved',
+                                        id: playerId,
+                                        x: data.x,
+                                        y: data.y,
+                                        flip: data.flip
+                                    }));
+                                }
                             }
                         }
                     }
                     break;
                 
                 case 'chat':
-                    const chatMessage = data.message;
-                    const chatNickname = data.nickname;
-                    
-                    console.log(`💬 Chat: ${chatNickname}: ${chatMessage}`);
-                    
                     for (let client of wss.clients) {
                         if (client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify({
                                 type: 'chat',
-                                nickname: chatNickname,
-                                message: chatMessage
+                                nickname: data.nickname,
+                                message: data.message
                             }));
                         }
                     }
                     break;
                 
                 case 'damage':
-                    const targetId = data.target_id;
-                    const damage = data.damage;
-                    const attackerId = data.attacker_id;
-                    
-                    console.log(`⚔️ Damage: ${attackerId} нанес урон ${damage} игроку ${targetId}`);
-                    
-                    if (players[targetId]) {
-                        players[targetId].hp = (players[targetId].hp || 100) - damage;
-                        players[targetId].timestamp = Date.now();
-                        console.log(`❤️ HP игрока ${targetId}: ${players[targetId].hp}`);
-                    }
-                    
                     for (let client of wss.clients) {
                         if (client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify({
                                 type: 'damage',
-                                target_id: targetId,
-                                damage: damage,
-                                attacker_id: attackerId
+                                target_id: data.target_id,
+                                damage: data.damage,
+                                attacker_id: data.attacker_id
                             }));
                         }
                     }
                     break;
                 
                 case 'death':
-                    const deadId = data.id;
-                    console.log(`💀 Death: ${deadId}`);
-                    
-                    delete players[deadId];
-                    
+                    delete players[data.id];
                     for (let client of wss.clients) {
                         if (client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify({
                                 type: 'death',
-                                id: deadId
+                                id: data.id
                             }));
                         }
                     }
                     break;
                 
+                case 'leave_lobby':
+                    if (players[playerId]) {
+                        console.log(`🎮 ${players[playerId].nickname} переходит в ИГРУ`);
+                        players[playerId].status = "game";
+                        players[playerId].timestamp = Date.now();
+                        
+                        // Оповещаем всех в лобби что игрок ушёл
+                        for (let client of wss.clients) {
+                            if (client !== ws && client.readyState === WebSocket.OPEN) {
+                                const targetPlayer = players[playerId];
+                                if (targetPlayer && targetPlayer.status === "game") {
+                                    client.send(JSON.stringify({
+                                        type: 'player_left',
+                                        id: playerId,
+                                        nickname: targetPlayer.nickname
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                    break;
+                
                 case 'reset_room':
-                    console.log(`🔄 Сброс комнаты по запросу ${playerId}`);
-                    
                     for (let id in players) {
                         if (id !== playerId) {
                             delete players[id];
                         }
                     }
-                    
-                    ws.send(JSON.stringify({
-                        type: 'room_reset',
-                        status: 'ok'
-                    }));
-                    break;
-                
-                case 'leave_lobby':
-                    console.log(`👋 Игрок ${playerId} покидает лобби и переходит в игру`);
-                    
-                    if (players[playerId]) {
-                        players[playerId].status = "in_game";
-                        players[playerId].timestamp = Date.now();
-                        
-                        // Оповещаем всех, что игрок покинул лобби
-                        for (let client of wss.clients) {
-                            if (client !== ws && client.readyState === WebSocket.OPEN) {
-                                client.send(JSON.stringify({
-                                    type: 'player_left',
-                                    id: playerId,
-                                    nickname: players[playerId].nickname
-                                }));
-                            }
-                        }
-                    }
-                    break;
-                    
-                case 'player_status':
-                    if (players[playerId]) {
-                        players[playerId].status = data.status;
-                        console.log(`📌 Игрок ${playerId} изменил статус на ${data.status}`);
-                    }
+                    ws.send(JSON.stringify({ type: 'room_reset', status: 'ok' }));
                     break;
             }
         } catch(e) {
@@ -236,9 +192,7 @@ wss.on('connection', (ws) => {
     
     ws.on('close', () => {
         if (playerId && players[playerId]) {
-            const playerNickname = players[playerId].nickname;
-            console.log(`👋 Player left: ${playerId} (${playerNickname})`);
-            
+            console.log(`👋 ${players[playerId].nickname} отключился`);
             delete players[playerId];
             
             for (let client of wss.clients) {
@@ -246,7 +200,7 @@ wss.on('connection', (ws) => {
                     client.send(JSON.stringify({
                         type: 'player_left',
                         id: playerId,
-                        nickname: playerNickname
+                        nickname: players[playerId]?.nickname || "Player"
                     }));
                 }
             }
@@ -257,5 +211,4 @@ wss.on('connection', (ws) => {
 const PORT = process.env.PORT || 2567;
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`🧹 Автоматическая очистка старых игроков активна (каждые 10 секунд)`);
 });
