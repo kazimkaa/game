@@ -27,6 +27,11 @@ wss.on('connection', (ws) => {
                     playerId = data.id;
                     currentRoom = 'lobby';
                     
+                    // Удаляем из игры если был
+                    if (gamePlayers[playerId]) {
+                        delete gamePlayers[playerId];
+                    }
+                    
                     lobbyPlayers[playerId] = { 
                         x: data.x, 
                         y: data.y, 
@@ -35,12 +40,13 @@ wss.on('connection', (ws) => {
                         character: data.character,
                         hp: 100
                     };
-                    console.log(`✅ ${lobbyPlayers[playerId].nickname} в ЛОББИ`);
+                    console.log(`✅ ${lobbyPlayers[playerId].nickname} в ЛОББИ (всего в лобби: ${Object.keys(lobbyPlayers).length})`);
                     
-                    const allLobbyPlayers = {};
+                    // Отправляем ТОЛЬКО игроков из ЛОББИ
+                    const onlyLobbyPlayers = {};
                     for (let id in lobbyPlayers) {
                         if (id !== playerId) {
-                            allLobbyPlayers[id] = {
+                            onlyLobbyPlayers[id] = {
                                 nickname: lobbyPlayers[id].nickname,
                                 character: lobbyPlayers[id].character,
                                 x: lobbyPlayers[id].x,
@@ -50,10 +56,14 @@ wss.on('connection', (ws) => {
                         }
                     }
                     
-                    ws.send(JSON.stringify({ type: 'init', players: allLobbyPlayers }));
+                    ws.send(JSON.stringify({
+                        type: 'init',
+                        players: onlyLobbyPlayers
+                    }));
                     
+                    // Оповещаем ТОЛЬКО игроков из ЛОББИ
                     for (let client of wss.clients) {
-                        if (client !== ws && client.readyState === WebSocket.OPEN) {
+                        if (client !== ws && client.readyState === WebSocket.OPEN && client.currentRoom === 'lobby') {
                             client.send(JSON.stringify({
                                 type: 'player_joined',
                                 id: playerId,
@@ -68,37 +78,53 @@ wss.on('connection', (ws) => {
                     break;
                     
                 case 'join_game':
+                    console.log(`🎮 Игрок ${playerId} переходит в ИГРУ`);
+                    
+                    // Удаляем из лобби
                     if (lobbyPlayers[playerId]) {
-                        console.log(`🎮 ${lobbyPlayers[playerId].nickname} в ИГРУ`);
-                        gamePlayers[playerId] = lobbyPlayers[playerId];
                         delete lobbyPlayers[playerId];
-                        currentRoom = 'game';
-                        
-                        for (let client of wss.clients) {
-                            if (client !== ws && client.readyState === WebSocket.OPEN) {
-                                client.send(JSON.stringify({
-                                    type: 'player_left',
-                                    id: playerId,
-                                    nickname: gamePlayers[playerId].nickname
-                                }));
-                            }
-                        }
-                        
-                        const allGamePlayers = {};
-                        for (let id in gamePlayers) {
-                            if (id !== playerId) {
-                                allGamePlayers[id] = {
-                                    nickname: gamePlayers[id].nickname,
-                                    character: gamePlayers[id].character,
-                                    x: gamePlayers[id].x,
-                                    y: gamePlayers[id].y,
-                                    flip: gamePlayers[id].flip
-                                };
-                            }
-                        }
-                        
-                        ws.send(JSON.stringify({ type: 'init_game', players: allGamePlayers }));
                     }
+                    
+                    gamePlayers[playerId] = { 
+                        x: data.x || 500,
+                        y: data.y || 300,
+                        flip: false,
+                        nickname: data.nickname || "Player",
+                        character: data.character || 1,
+                        hp: 100
+                    };
+                    currentRoom = 'game';
+                    
+                    // Оповещаем ЛОББИ что игрок ушёл
+                    for (let client of wss.clients) {
+                        if (client !== ws && client.readyState === WebSocket.OPEN && client.currentRoom === 'lobby') {
+                            client.send(JSON.stringify({
+                                type: 'player_left',
+                                id: playerId,
+                                nickname: gamePlayers[playerId].nickname
+                            }));
+                        }
+                    }
+                    
+                    // Отправляем игроку ТОЛЬКО игроков из ИГРЫ
+                    const onlyGamePlayers = {};
+                    for (let id in gamePlayers) {
+                        if (id !== playerId) {
+                            onlyGamePlayers[id] = {
+                                nickname: gamePlayers[id].nickname,
+                                character: gamePlayers[id].character,
+                                x: gamePlayers[id].x,
+                                y: gamePlayers[id].y,
+                                flip: gamePlayers[id].flip
+                            };
+                        }
+                    }
+                    
+                    ws.send(JSON.stringify({
+                        type: 'init_game',
+                        players: onlyGamePlayers
+                    }));
+                    console.log(`📊 Теперь в игре: ${Object.keys(gamePlayers).length}, в лобби: ${Object.keys(lobbyPlayers).length}`);
                     break;
                     
                 case 'move':
@@ -107,8 +133,9 @@ wss.on('connection', (ws) => {
                         lobbyPlayers[playerId].y = data.y;
                         lobbyPlayers[playerId].flip = data.flip;
                         
+                        // Рассылаем ТОЛЬКО в лобби
                         for (let client of wss.clients) {
-                            if (client !== ws && client.readyState === WebSocket.OPEN) {
+                            if (client !== ws && client.readyState === WebSocket.OPEN && client.currentRoom === 'lobby') {
                                 client.send(JSON.stringify({
                                     type: 'player_moved',
                                     id: playerId,
@@ -123,8 +150,9 @@ wss.on('connection', (ws) => {
                         gamePlayers[playerId].y = data.y;
                         gamePlayers[playerId].flip = data.flip;
                         
+                        // Рассылаем ТОЛЬКО в игру
                         for (let client of wss.clients) {
-                            if (client !== ws && client.readyState === WebSocket.OPEN) {
+                            if (client !== ws && client.readyState === WebSocket.OPEN && client.currentRoom === 'game') {
                                 client.send(JSON.stringify({
                                     type: 'player_moved',
                                     id: playerId,
@@ -138,6 +166,7 @@ wss.on('connection', (ws) => {
                     break;
                 
                 case 'chat':
+                    // Чат для всех
                     for (let client of wss.clients) {
                         if (client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify({
@@ -151,7 +180,7 @@ wss.on('connection', (ws) => {
                 
                 case 'damage':
                     for (let client of wss.clients) {
-                        if (client.readyState === WebSocket.OPEN) {
+                        if (client.readyState === WebSocket.OPEN && client.currentRoom === 'game') {
                             client.send(JSON.stringify({
                                 type: 'damage',
                                 target_id: data.target_id,
@@ -165,7 +194,7 @@ wss.on('connection', (ws) => {
                 case 'death':
                     delete gamePlayers[data.id];
                     for (let client of wss.clients) {
-                        if (client.readyState === WebSocket.OPEN) {
+                        if (client.readyState === WebSocket.OPEN && client.currentRoom === 'game') {
                             client.send(JSON.stringify({
                                 type: 'death',
                                 id: data.id
@@ -188,15 +217,26 @@ wss.on('connection', (ws) => {
     
     ws.on('close', () => {
         if (playerId) {
+            console.log(`👋 Игрок отключился: ${playerId}`);
             if (lobbyPlayers[playerId]) delete lobbyPlayers[playerId];
             if (gamePlayers[playerId]) delete gamePlayers[playerId];
             
             for (let client of wss.clients) {
                 if (client.readyState === WebSocket.OPEN) {
-                    client.send(JSON.stringify({ type: 'player_left', id: playerId, nickname: "Player" }));
+                    client.send(JSON.stringify({
+                        type: 'player_left',
+                        id: playerId,
+                        nickname: "Player"
+                    }));
                 }
             }
         }
+    });
+    
+    // Сохраняем комнату
+    Object.defineProperty(ws, 'currentRoom', {
+        get: () => currentRoom,
+        set: (value) => currentRoom = value
     });
 });
 
