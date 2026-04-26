@@ -12,6 +12,43 @@ app.get('/', (req, res) => {
     res.send('WebSocket server works!');
 });
 
+// Функция очистки старых игроков (по времени)
+function clearOldPlayers() {
+    const now = Date.now();
+    let removed = 0;
+    
+    for (let id in players) {
+        // Если игрок старше 30 секунд и он не активен
+        if (players[id].timestamp && (now - players[id].timestamp > 30000)) {
+            console.log(`🗑️ Удаляю старого игрока: ${id} (${players[id].nickname})`);
+            
+            // Оповещаем всех об удалении
+            for (let client of wss.clients) {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify({
+                        type: 'player_left',
+                        id: id,
+                        nickname: players[id].nickname
+                    }));
+                }
+            }
+            
+            delete players[id];
+            removed++;
+        }
+    }
+    
+    if (removed > 0) {
+        console.log(`✨ Очистка завершена. Удалено: ${removed} игроков`);
+    }
+    return removed;
+}
+
+// Запускаем очистку каждые 10 секунд
+setInterval(() => {
+    clearOldPlayers();
+}, 10000);
+
 wss.on('connection', (ws) => {
     let playerId = null;
     
@@ -24,15 +61,17 @@ wss.on('connection', (ws) => {
                 case 'join':
                     playerId = data.id;
                     
+                    // Добавляем timestamp при подключении
                     players[playerId] = { 
                         x: data.x, 
                         y: data.y, 
                         flip: data.flip || false,
                         nickname: data.nickname || "Player",
                         character: data.character,
-                        hp: 100
+                        hp: 100,
+                        timestamp: Date.now()  // ВАЖНО: добавляем время подключения
                     };
-                    console.log(`Player joined: ${playerId} (${players[playerId].nickname})`);
+                    console.log(`✅ Player joined: ${playerId} (${players[playerId].nickname})`);
                     
                     // Отправляем новому игроку всех существующих
                     const allPlayers = {};
@@ -74,6 +113,7 @@ wss.on('connection', (ws) => {
                         players[playerId].x = data.x;
                         players[playerId].y = data.y;
                         players[playerId].flip = data.flip;
+                        players[playerId].timestamp = Date.now(); // Обновляем время активности
                         
                         for (let client of wss.clients) {
                             if (client !== ws && client.readyState === WebSocket.OPEN) {
@@ -93,7 +133,7 @@ wss.on('connection', (ws) => {
                     const chatMessage = data.message;
                     const chatNickname = data.nickname;
                     
-                    console.log(`Chat: ${chatNickname}: ${chatMessage}`);
+                    console.log(`💬 Chat: ${chatNickname}: ${chatMessage}`);
                     
                     for (let client of wss.clients) {
                         if (client.readyState === WebSocket.OPEN) {
@@ -106,21 +146,19 @@ wss.on('connection', (ws) => {
                     }
                     break;
                 
-                // НОВЫЙ ОБРАБОТЧИК ДЛЯ УРОНА
                 case 'damage':
                     const targetId = data.target_id;
                     const damage = data.damage;
                     const attackerId = data.attacker_id;
                     
-                    console.log(`Damage: ${attackerId} нанес урон ${damage} игроку ${targetId}`);
+                    console.log(`⚔️ Damage: ${attackerId} нанес урон ${damage} игроку ${targetId}`);
                     
-                    // Обновляем HP на сервере
                     if (players[targetId]) {
                         players[targetId].hp = (players[targetId].hp || 100) - damage;
-                        console.log(`HP игрока ${targetId}: ${players[targetId].hp}`);
+                        players[targetId].timestamp = Date.now();
+                        console.log(`❤️ HP игрока ${targetId}: ${players[targetId].hp}`);
                     }
                     
-                    // Рассылаем урон всем игрокам
                     for (let client of wss.clients) {
                         if (client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify({
@@ -133,15 +171,12 @@ wss.on('connection', (ws) => {
                     }
                     break;
                 
-                // НОВЫЙ ОБРАБОТЧИК ДЛЯ СМЕРТИ
                 case 'death':
                     const deadId = data.id;
-                    console.log(`Death: ${deadId}`);
+                    console.log(`💀 Death: ${deadId}`);
                     
-                    // Удаляем игрока из списка
                     delete players[deadId];
                     
-                    // Рассылаем смерть всем
                     for (let client of wss.clients) {
                         if (client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify({
@@ -150,6 +185,24 @@ wss.on('connection', (ws) => {
                             }));
                         }
                     }
+                    break;
+                
+                // НОВЫЙ ОБРАБОТЧИК ДЛЯ СБРОСА КОМНАТЫ
+                case 'reset_room':
+                    console.log(`🔄 Сброс комнаты по запросу ${playerId}`);
+                    
+                    // Удаляем всех игроков
+                    for (let id in players) {
+                        if (id !== playerId) {
+                            delete players[id];
+                        }
+                    }
+                    
+                    // Подтверждаем сброс
+                    ws.send(JSON.stringify({
+                        type: 'room_reset',
+                        status: 'ok'
+                    }));
                     break;
             }
         } catch(e) {
@@ -160,7 +213,7 @@ wss.on('connection', (ws) => {
     ws.on('close', () => {
         if (playerId && players[playerId]) {
             const playerNickname = players[playerId].nickname;
-            console.log(`Player left: ${playerId} (${playerNickname})`);
+            console.log(`👋 Player left: ${playerId} (${playerNickname})`);
             
             delete players[playerId];
             
@@ -179,5 +232,6 @@ wss.on('connection', (ws) => {
 
 const PORT = process.env.PORT || 2567;
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🧹 Автоматическая очистка старых игроков активна (каждые 10 секунд)`);
 });
