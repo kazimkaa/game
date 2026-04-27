@@ -1,3 +1,4 @@
+
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
@@ -10,6 +11,10 @@ const lobbyPlayers = {};
 const gamePlayers = {};
 const clientRoom = new Map();
 
+// HP башен
+let town1_hp = 1000;
+let town2_hp = 1000;
+
 // Таймер лобби
 let countdownActive = false;
 let countdownValue = 60;
@@ -18,6 +23,26 @@ let countdownInterval = null;
 app.get('/', (req, res) => {
     res.send('WebSocket server works!');
 });
+
+// Функция для разделения на команды
+function assignTeams() {
+    const players = Object.keys(gamePlayers);
+    // Перемешиваем игроков
+    for (let i = players.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [players[i], players[j]] = [players[j], players[i]];
+    }
+    
+    // Разделяем на две команды
+    const half = Math.ceil(players.length / 2);
+    
+    for (let i = 0; i < players.length; i++) {
+        const id = players[i];
+        const team = i < half ? 1 : 2;
+        gamePlayers[id].team = team;
+        console.log(`   ${gamePlayers[id].nickname} -> Команда ${team}`);
+    }
+}
 
 function startCountdown() {
     if (countdownActive) return;
@@ -87,6 +112,13 @@ function startGameForAll() {
             delete lobbyPlayers[id];
         }
     }
+    
+    // Разделяем на команды
+    assignTeams();
+    
+    // Сбрасываем HP башен
+    town1_hp = 1000;
+    town2_hp = 1000;
     
     // Отправляем каждому клиенту переход в игру
     for (let client of wss.clients) {
@@ -161,7 +193,7 @@ wss.on('connection', (ws) => {
                     break;
                     
                 case 'level_ready':
-                    console.log(`📍 ${playerNickname} загрузил уровень, отправляем список игроков`);
+                    console.log(`📍 ${playerNickname} загрузил уровень`);
                     
                     const otherPlayers = {};
                     for (let id in gamePlayers) {
@@ -171,14 +203,18 @@ wss.on('connection', (ws) => {
                                 character: gamePlayers[id].character,
                                 x: gamePlayers[id].x,
                                 y: gamePlayers[id].y,
-                                flip: gamePlayers[id].flip
+                                flip: gamePlayers[id].flip,
+                                team: gamePlayers[id].team
                             };
                         }
                     }
                     
                     ws.send(JSON.stringify({
                         type: 'init_game',
-                        players: otherPlayers
+                        players: otherPlayers,
+                        my_team: gamePlayers[playerId].team,
+                        town1_hp: town1_hp,
+                        town2_hp: town2_hp
                     }));
                     break;
                     
@@ -204,14 +240,61 @@ wss.on('connection', (ws) => {
                     }
                     break;
                     
-                case 'damage':
-                    if (!gamePlayers[data.target_id]) break;
+                case 'town_damage':
+                    console.log(`🏰 Урон башне ${data.town_id} от ${playerNickname}`);
+                    
+                    const attackerTeam = gamePlayers[playerId]?.team;
+                    const townId = data.town_id;
+                    
+                    // Нельзя атаковать свою башню
+                    if ((townId === 1 && attackerTeam === 1) || (townId === 2 && attackerTeam === 2)) {
+                        console.log(`   Нельзя атаковать свою башню!`);
+                        break;
+                    }
+                    
+                    // Наносим урон
+                    if (townId === 1) {
+                        town1_hp = Math.max(0, town1_hp - data.damage);
+                    } else {
+                        town2_hp = Math.max(0, town2_hp - data.damage);
+                    }
+                    
+                    // Рассылаем всем в игре
                     for (let client of wss.clients) {
                         if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === 'game') {
                             client.send(JSON.stringify({
-                                type: 'damage', target_id: data.target_id,
-                                damage: data.damage, attacker_id: data.attacker_id
+                                type: 'town_damage',
+                                town_id: townId,
+                                damage: data.damage,
+                                new_hp: townId === 1 ? town1_hp : town2_hp
                             }));
+                        }
+                    }
+                    
+                    // Проверка победы
+                    if (town1_hp <= 0) {
+                        broadcastToGame({ type: 'game_over', winner: 2 });
+                        console.log("🏆 КОМАНДА 2 ПОБЕДИЛА!");
+                    } else if (town2_hp <= 0) {
+                        broadcastToGame({ type: 'game_over', winner: 1 });
+                        console.log("🏆 КОМАНДА 1 ПОБЕДИЛА!");
+                    }
+                    break;
+                    
+                case 'damage':
+                    if (!gamePlayers[data.target_id]) break;
+                    
+                    const attacker = gamePlayers[data.attacker_id];
+                    const target = gamePlayers[data.target_id];
+                    
+                    if (attacker && target && attacker.team !== target.team) {
+                        for (let client of wss.clients) {
+                            if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === 'game') {
+                                client.send(JSON.stringify({
+                                    type: 'damage', target_id: data.target_id,
+                                    damage: data.damage, attacker_id: data.attacker_id
+                                }));
+                            }
                         }
                     }
                     break;
