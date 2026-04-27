@@ -89,12 +89,15 @@ function broadcastToLobby(data) {
 }
 
 function broadcastToGame(data) {
-    console.log(`   📤 Отправка всем в игре:`, data.type);
+    console.log(`   📤 Отправка всем в игре (${wss.clients.size} клиентов):`, data.type);
+    let sent = 0;
     for (let client of wss.clients) {
         if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === 'game') {
             client.send(JSON.stringify(data));
+            sent++;
         }
     }
+    console.log(`   ✅ Отправлено ${sent} клиентам`);
 }
 
 function startGameForAll() {
@@ -238,18 +241,25 @@ wss.on('connection', (ws) => {
                     
                 case 'town_damage':
                     console.log(`\n🏰 ======================== TOWN_DAMAGE ========================`);
-                    console.log(`Игрок: ${playerNickname} (${playerId})`);
+                    console.log(`📨 Получено сообщение:`, JSON.stringify(data, null, 2));
+                    console.log(`Игрок ID: ${playerId}`);
+                    console.log(`Игрок имя: ${playerNickname}`);
                     console.log(`Комната: ${clientRoom.get(ws)}`);
                     console.log(`В gamePlayers: ${playerId in gamePlayers}`);
-                    console.log(`Текущий HP башни 1: ${town1_hp}`);
-                    console.log(`Текущий HP башни 2: ${town2_hp}`);
-                    console.log(`Полученные данные:`, data);
+                    
+                    if (gamePlayers[playerId]) {
+                        console.log(`Информация об игроке:`, JSON.stringify(gamePlayers[playerId], null, 2));
+                    }
+                    
+                    console.log(`\n📊 Статус башен ДО удара:`);
+                    console.log(`   Красная башня (1): ${town1_hp}/1000`);
+                    console.log(`   Синяя башня (2): ${town2_hp}/1000`);
                     
                     // ✅ ИСПРАВЛЕННЫЙ КОД
-                    // Проверяем, находится ли игрок в игре
                     if (!gamePlayers[playerId]) {
-                        console.log(`❌ ОШИБКА: Игрок ${playerNickname} не найден в gamePlayers!`);
+                        console.log(`❌ ОШИБКА: Игрок не найден в gamePlayers!`);
                         console.log(`Доступные игроки:`, Object.keys(gamePlayers));
+                        console.log(`🏰 ============================================================\n`);
                         break;
                     }
                     
@@ -257,27 +267,38 @@ wss.on('connection', (ws) => {
                     const townId = data.town_id;
                     const damage = data.damage || 0;
                     
-                    console.log(`Атакующая команда: ${attackerTeam}`);
-                    console.log(`Целевая башня: ${townId}`);
-                    console.log(`Урон: ${damage}`);
+                    console.log(`\n⚔️ Параметры атаки:`);
+                    console.log(`   Команда атакующего: ${attackerTeam}`);
+                    console.log(`   Целевая башня: ${townId}`);
+                    console.log(`   Урон: ${damage}`);
                     
                     // Нельзя атаковать свою башню
                     if ((townId === 1 && attackerTeam === 1) || (townId === 2 && attackerTeam === 2)) {
-                        console.log(`❌ Нельзя атаковать свою башню!`);
+                        console.log(`❌ БЛОКИРОВАН: Игрок пытается атаковать свою башню!`);
+                        console.log(`🏰 ============================================================\n`);
                         break;
                     }
                     
+                    console.log(`✅ АТАКА РАЗРЕШЕНА`);
+                    
                     // Наносим урон
                     if (townId === 1) {
+                        const old_hp = town1_hp;
                         town1_hp = Math.max(0, town1_hp - damage);
-                        console.log(`✅ КРАСНАЯ БАШНЯ получила ${damage} урона. HP: ${town1_hp}/1000`);
+                        console.log(`💥 КРАСНАЯ БАШНЯ: ${old_hp} -> ${town1_hp} (-${damage})`);
                     } else if (townId === 2) {
+                        const old_hp = town2_hp;
                         town2_hp = Math.max(0, town2_hp - damage);
-                        console.log(`✅ СИНЯЯ БАШНЯ получила ${damage} урона. HP: ${town2_hp}/1000`);
+                        console.log(`💥 СИНЯЯ БАШНЯ: ${old_hp} -> ${town2_hp} (-${damage})`);
                     } else {
                         console.log(`❌ Неверный ID башни: ${townId}`);
+                        console.log(`🏰 ============================================================\n`);
                         break;
                     }
+                    
+                    console.log(`\n📊 Статус башен ПОСЛЕ удара:`);
+                    console.log(`   Красная башня (1): ${town1_hp}/1000`);
+                    console.log(`   Синяя башня (2): ${town2_hp}/1000`);
                     
                     // Рассылаем всем в игре обновление урона
                     const damageMsg = {
@@ -286,15 +307,16 @@ wss.on('connection', (ws) => {
                         damage: damage,
                         new_hp: townId === 1 ? town1_hp : town2_hp
                     };
-                    console.log(`📤 Отправляю сообщение:`, damageMsg);
+                    console.log(`\n📤 Отправляю сообщение всем:`);
+                    console.log(`   ${JSON.stringify(damageMsg)}`);
                     broadcastToGame(damageMsg);
                     
                     // Проверка победы
                     if (town1_hp <= 0) {
-                        console.log("🏆 КОМАНДА 2 ПОБЕДИЛА! СИНЯЯ БАШНЯ РАЗРУШЕНА!");
+                        console.log("\n🏆🏆🏆 КОМАНДА 2 ПОБЕДИЛА! КРАСНАЯ БАШНЯ РАЗРУШЕНА!");
                         broadcastToGame({ type: 'game_over', winner: 2 });
                     } else if (town2_hp <= 0) {
-                        console.log("🏆 КОМАНДА 1 ПОБЕДИЛА! КРАСНАЯ БАШНЯ РАЗРУШЕНА!");
+                        console.log("\n🏆🏆🏆 КОМАНДА 1 ПОБЕДИЛА! СИНЯЯ БАШНЯ РАЗРУШЕНА!");
                         broadcastToGame({ type: 'game_over', winner: 1 });
                     }
                     console.log(`🏰 ============================================================\n`);
