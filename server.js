@@ -19,7 +19,6 @@ app.get('/', (req, res) => {
     res.send('WebSocket server works!');
 });
 
-// Функция для запуска таймера в лобби
 function startCountdown() {
     if (countdownActive) return;
     
@@ -27,11 +26,8 @@ function startCountdown() {
     if (playersCount < 2) return;
     
     countdownActive = true;
-    countdownValue = 60;
+    countdownValue = 10; // Для теста 10 секунд
     
-    console.log(`⏰ ТАЙМЕР ЗАПУЩЕН: ${countdownValue} секунд`);
-    
-    // Рассылаем начало отсчёта всем в лобби
     broadcastToLobby({
         type: 'countdown_start',
         time: countdownValue
@@ -40,19 +36,12 @@ function startCountdown() {
     countdownInterval = setInterval(() => {
         countdownValue--;
         
-        console.log(`⏰ Таймер: ${countdownValue}`);
-        
         if (countdownValue <= 0) {
-            // Таймер закончился - запускаем игру для всех
-            console.log("🎮 ТАЙМЕР ЗАКОНЧИЛСЯ! ЗАПУСКАЕМ ИГРУ");
             clearInterval(countdownInterval);
             countdownInterval = null;
             countdownActive = false;
-            
-            // Переводим всех игроков из лобби в игру
             startGameForAll();
         } else {
-            // Рассылаем обновление таймера
             broadcastToLobby({
                 type: 'countdown_update',
                 time: countdownValue
@@ -67,11 +56,7 @@ function cancelCountdown() {
         countdownInterval = null;
     }
     countdownActive = false;
-    
-    broadcastToLobby({
-        type: 'countdown_cancel'
-    });
-    console.log("⏰ ТАЙМЕР ОТМЕНЁН");
+    broadcastToLobby({ type: 'countdown_cancel' });
 }
 
 function broadcastToLobby(data) {
@@ -91,32 +76,28 @@ function broadcastToGame(data) {
 }
 
 function startGameForAll() {
-    console.log("🎮 STARTGAMEFORALL - НАЧАЛО");
-    console.log(`   Игроков в лобби до переноса: ${Object.keys(lobbyPlayers).length}`);
+    console.log("🎮 STARTGAMEFORALL");
     
-    // Копируем всех игроков из лобби в игру
+    // Переносим всех из лобби в игру
     const playersToMove = [...Object.keys(lobbyPlayers)];
     
     for (let id of playersToMove) {
         if (lobbyPlayers[id]) {
             gamePlayers[id] = { ...lobbyPlayers[id] };
             delete lobbyPlayers[id];
-            console.log(`   Перенесён игрок: ${id}`);
         }
     }
     
-    console.log(`   Игроков в игре после переноса: ${Object.keys(gamePlayers).length}`);
-    
-    // Меняем комнату для всех клиентов, которые были в лобби
+    // Отправляем каждому клиенту переход в игру и список игроков
     for (let client of wss.clients) {
         if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === 'lobby') {
             clientRoom.set(client, 'game');
             
-            // Отправляем каждому игроку список игроков в игре
-            const onlyGamePlayers = {};
+            // Список остальных игроков
+            const otherPlayers = {};
             for (let id in gamePlayers) {
                 if (id !== client.playerId) {
-                    onlyGamePlayers[id] = {
+                    otherPlayers[id] = {
                         nickname: gamePlayers[id].nickname,
                         character: gamePlayers[id].character,
                         x: gamePlayers[id].x,
@@ -126,16 +107,15 @@ function startGameForAll() {
                 }
             }
             
-            console.log(`   Отправляем init_game клиенту ${client.playerId}, игроков: ${Object.keys(onlyGamePlayers).length}`);
-            
+            // Отправляем команду на переход в игру с данными
             client.send(JSON.stringify({
-                type: 'init_game',
-                players: onlyGamePlayers
+                type: 'start_game',
+                players: otherPlayers
             }));
         }
     }
     
-    console.log(`🎮 ИГРА НАЧАЛАСЬ! В игре: ${Object.keys(gamePlayers).length} игроков`);
+    console.log(`📊 В игре: ${Object.keys(gamePlayers).length} игроков`);
 }
 
 wss.on('connection', (ws) => {
@@ -143,7 +123,6 @@ wss.on('connection', (ws) => {
     let playerNickname = "";
     let playerCharacter = 1;
     
-    // Сохраняем playerId на ws
     Object.defineProperty(ws, 'playerId', {
         get: () => playerId,
         set: (value) => playerId = value
@@ -194,67 +173,32 @@ wss.on('connection', (ws) => {
                         }
                     }
                     
-                    // Проверяем, нужно ли запустить таймер
                     if (Object.keys(lobbyPlayers).length >= 2 && !countdownActive) {
                         startCountdown();
                     }
                     break;
+                
+                case 'level_ready':
+                    // Клиент загрузил уровень, отправляем ему список игроков
+                    console.log(`📍 ${playerNickname} загрузил уровень, отправляем список игроков`);
                     
-                case 'join_game':
-                    console.log(`🎮 ${playerNickname} (${playerId}) запросил join_game`);
-                    
-                    // Если игрок уже в игре - не обрабатываем
-                    if (clientRoom.get(ws) === 'game') {
-                        console.log(`   Игрок уже в игре, пропускаем`);
-                        break;
-                    }
-                    
-                    // Удаляем из лобби если есть
-                    if (lobbyPlayers[playerId]) {
-                        delete lobbyPlayers[playerId];
-                    }
-                    
-                    if (data.nickname) playerNickname = data.nickname;
-                    if (data.character) playerCharacter = data.character;
-                    
-                    gamePlayers[playerId] = { 
-                        x: data.x || 500, y: data.y || 300, flip: false,
-                        nickname: playerNickname, character: playerCharacter, hp: 100
-                    };
-                    clientRoom.set(ws, 'game');
-                    
-                    console.log(`   📊 Лобби: ${Object.keys(lobbyPlayers).length}, Игра: ${Object.keys(gamePlayers).length}`);
-                    
-                    // Оповещаем лобби
-                    for (let client of wss.clients) {
-                        if (client !== ws && client.readyState === WebSocket.OPEN && clientRoom.get(client) === 'lobby') {
-                            client.send(JSON.stringify({ type: 'player_left', id: playerId }));
-                        }
-                    }
-                    
-                    // Оповещаем игру
-                    for (let client of wss.clients) {
-                        if (client !== ws && client.readyState === WebSocket.OPEN && clientRoom.get(client) === 'game') {
-                            client.send(JSON.stringify({
-                                type: 'player_joined_game', id: playerId,
-                                nickname: playerNickname, character: playerCharacter,
-                                x: gamePlayers[playerId].x, y: gamePlayers[playerId].y, flip: false
-                            }));
-                        }
-                    }
-                    
-                    // Отправляем текущему игроку список игры
-                    const onlyGamePlayers = {};
+                    const otherPlayers = {};
                     for (let id in gamePlayers) {
                         if (id !== playerId) {
-                            onlyGamePlayers[id] = {
+                            otherPlayers[id] = {
                                 nickname: gamePlayers[id].nickname,
                                 character: gamePlayers[id].character,
-                                x: gamePlayers[id].x, y: gamePlayers[id].y, flip: gamePlayers[id].flip
+                                x: gamePlayers[id].x,
+                                y: gamePlayers[id].y,
+                                flip: gamePlayers[id].flip
                             };
                         }
                     }
-                    ws.send(JSON.stringify({ type: 'init_game', players: onlyGamePlayers }));
+                    
+                    ws.send(JSON.stringify({
+                        type: 'init_game',
+                        players: otherPlayers
+                    }));
                     break;
                     
                 case 'move':
@@ -324,7 +268,6 @@ wss.on('connection', (ws) => {
             delete gamePlayers[playerId];
             clientRoom.delete(ws);
             
-            // Если в лобби осталось меньше 2 игроков - отменяем таймер
             if (Object.keys(lobbyPlayers).length < 2 && countdownActive) {
                 cancelCountdown();
             }
