@@ -26,7 +26,7 @@ function startCountdown() {
     if (playersCount < 2) return;
     
     countdownActive = true;
-    countdownValue = 10; // Для теста 10 секунд
+    countdownValue = 60;
     
     broadcastToLobby({
         type: 'countdown_start',
@@ -88,29 +88,13 @@ function startGameForAll() {
         }
     }
     
-    // Отправляем каждому клиенту переход в игру и список игроков
+    // Отправляем каждому клиенту переход в игру
     for (let client of wss.clients) {
         if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === 'lobby') {
             clientRoom.set(client, 'game');
             
-            // Список остальных игроков
-            const otherPlayers = {};
-            for (let id in gamePlayers) {
-                if (id !== client.playerId) {
-                    otherPlayers[id] = {
-                        nickname: gamePlayers[id].nickname,
-                        character: gamePlayers[id].character,
-                        x: gamePlayers[id].x,
-                        y: gamePlayers[id].y,
-                        flip: gamePlayers[id].flip
-                    };
-                }
-            }
-            
-            // Отправляем команду на переход в игру с данными
             client.send(JSON.stringify({
-                type: 'start_game',
-                players: otherPlayers
+                type: 'start_game'
             }));
         }
     }
@@ -149,7 +133,6 @@ wss.on('connection', (ws) => {
                     };
                     console.log(`✅ ${playerNickname} в ЛОББИ (лобби: ${Object.keys(lobbyPlayers).length})`);
                     
-                    // Отправляем текущему игроку список лобби
                     const onlyLobbyPlayers = {};
                     for (let id in lobbyPlayers) {
                         if (id !== playerId) {
@@ -162,7 +145,6 @@ wss.on('connection', (ws) => {
                     }
                     ws.send(JSON.stringify({ type: 'init', players: onlyLobbyPlayers }));
                     
-                    // Оповещаем лобби о новом игроке
                     for (let client of wss.clients) {
                         if (client !== ws && client.readyState === WebSocket.OPEN && clientRoom.get(client) === 'lobby') {
                             client.send(JSON.stringify({
@@ -177,9 +159,8 @@ wss.on('connection', (ws) => {
                         startCountdown();
                     }
                     break;
-                
+                    
                 case 'level_ready':
-                    // Клиент загрузил уровень, отправляем ему список игроков
                     console.log(`📍 ${playerNickname} загрузил уровень, отправляем список игроков`);
                     
                     const otherPlayers = {};
