@@ -1,4 +1,3 @@
-
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
@@ -24,16 +23,13 @@ app.get('/', (req, res) => {
     res.send('WebSocket server works!');
 });
 
-// Функция для разделения на команды
 function assignTeams() {
     const players = Object.keys(gamePlayers);
-    // Перемешиваем игроков
     for (let i = players.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [players[i], players[j]] = [players[j], players[i]];
     }
     
-    // Разделяем на две команды
     const half = Math.ceil(players.length / 2);
     
     for (let i = 0; i < players.length; i++) {
@@ -103,7 +99,6 @@ function broadcastToGame(data) {
 function startGameForAll() {
     console.log("🎮 STARTGAMEFORALL");
     
-    // Переносим всех из лобби в игру
     const playersToMove = [...Object.keys(lobbyPlayers)];
     
     for (let id of playersToMove) {
@@ -113,14 +108,11 @@ function startGameForAll() {
         }
     }
     
-    // Разделяем на команды
     assignTeams();
     
-    // Сбрасываем HP башен
     town1_hp = 1000;
     town2_hp = 1000;
     
-    // Отправляем каждому клиенту переход в игру
     for (let client of wss.clients) {
         if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === 'lobby') {
             clientRoom.set(client, 'game');
@@ -241,43 +233,54 @@ wss.on('connection', (ws) => {
                     break;
                     
                 case 'town_damage':
-                    console.log(`🏰 Урон башне ${data.town_id} от ${playerNickname}`);
+                    console.log(`🏰 Урон башне ${data.town_id} от ${playerNickname} (ID: ${playerId})`);
                     
-                    const attackerTeam = gamePlayers[playerId]?.team;
+                    // ✅ ИСПРАВЛЕННЫЙ КОД
+                    // Проверяем, находится ли игрок в игре
+                    if (!gamePlayers[playerId]) {
+                        console.log(`   ❌ Ошибка: игрок ${playerNickname} не в игре!`);
+                        break;
+                    }
+                    
+                    const attackerTeam = gamePlayers[playerId].team;
                     const townId = data.town_id;
+                    const damage = data.damage || 0;
+                    
+                    console.log(`   Атакующая команда: ${attackerTeam}, Башня: ${townId}`);
                     
                     // Нельзя атаковать свою башню
                     if ((townId === 1 && attackerTeam === 1) || (townId === 2 && attackerTeam === 2)) {
-                        console.log(`   Нельзя атаковать свою башню!`);
+                        console.log(`   ❌ Нельзя атаковать свою башню!`);
                         break;
                     }
                     
                     // Наносим урон
                     if (townId === 1) {
-                        town1_hp = Math.max(0, town1_hp - data.damage);
+                        town1_hp = Math.max(0, town1_hp - damage);
+                        console.log(`   ✅ КРАСНАЯ БАШНЯ получила ${damage} урона. HP: ${town1_hp}/1000`);
+                    } else if (townId === 2) {
+                        town2_hp = Math.max(0, town2_hp - damage);
+                        console.log(`   ✅ СИНЯЯ БАШНЯ получила ${damage} урона. HP: ${town2_hp}/1000`);
                     } else {
-                        town2_hp = Math.max(0, town2_hp - data.damage);
+                        console.log(`   ❌ Неверный ID башни: ${townId}`);
+                        break;
                     }
                     
-                    // Рассылаем всем в игре
-                    for (let client of wss.clients) {
-                        if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === 'game') {
-                            client.send(JSON.stringify({
-                                type: 'town_damage',
-                                town_id: townId,
-                                damage: data.damage,
-                                new_hp: townId === 1 ? town1_hp : town2_hp
-                            }));
-                        }
-                    }
+                    // Рассылаем всем в игре обновление урона
+                    broadcastToGame({
+                        type: 'town_damage',
+                        town_id: townId,
+                        damage: damage,
+                        new_hp: townId === 1 ? town1_hp : town2_hp
+                    });
                     
                     // Проверка победы
                     if (town1_hp <= 0) {
+                        console.log("🏆 КОМАНДА 2 ПОБЕДИЛА! СИНЯЯ БАШНЯ РАЗРУШЕНА!");
                         broadcastToGame({ type: 'game_over', winner: 2 });
-                        console.log("🏆 КОМАНДА 2 ПОБЕДИЛА!");
                     } else if (town2_hp <= 0) {
+                        console.log("🏆 КОМАНДА 1 ПОБЕДИЛА! КРАСНАЯ БАШНЯ РАЗРУШЕНА!");
                         broadcastToGame({ type: 'game_over', winner: 1 });
-                        console.log("🏆 КОМАНДА 1 ПОБЕДИЛА!");
                     }
                     break;
                     
@@ -288,14 +291,12 @@ wss.on('connection', (ws) => {
                     const target = gamePlayers[data.target_id];
                     
                     if (attacker && target && attacker.team !== target.team) {
-                        for (let client of wss.clients) {
-                            if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === 'game') {
-                                client.send(JSON.stringify({
-                                    type: 'damage', target_id: data.target_id,
-                                    damage: data.damage, attacker_id: data.attacker_id
-                                }));
-                            }
-                        }
+                        broadcastToGame({
+                            type: 'damage',
+                            target_id: data.target_id,
+                            damage: data.damage,
+                            attacker_id: data.attacker_id
+                        });
                     }
                     break;
                     
@@ -305,11 +306,11 @@ wss.on('connection', (ws) => {
                     break;
                     
                 case 'chat':
-                    for (let client of wss.clients) {
-                        if (client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({ type: 'chat', nickname: data.nickname, message: data.message }));
-                        }
-                    }
+                    broadcastToGame({
+                        type: 'chat',
+                        nickname: data.nickname,
+                        message: data.message
+                    });
                     break;
                     
                 case 'reset_room':
@@ -321,7 +322,7 @@ wss.on('connection', (ws) => {
                     break;
             }
         } catch(e) {
-            console.log("Error:", e);
+            console.log("❌ Error:", e);
         }
     });
     
