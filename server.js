@@ -17,9 +17,10 @@ let countdownActive = false;
 let countdownValue = 15;
 let countdownInterval = null;
 
+const PLAYER_MAX_HP = 100;
+
 app.get('/', (req, res) => res.send('Multiplayer Server Active'));
 
-// --- РАССЫЛКА ---
 function broadcastToRoom(room, data) {
     const packet = JSON.stringify(data);
     wss.clients.forEach(client => {
@@ -29,10 +30,8 @@ function broadcastToRoom(room, data) {
     });
 }
 
-// --- ЛОГИКА КОМАНД ---
 function assignTeams() {
     const ids = Object.keys(gamePlayers);
-    // Перемешивание массива (Fisher-Yates)
     for (let i = ids.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [ids[i], ids[j]] = [ids[j], ids[i]];
@@ -42,12 +41,14 @@ function assignTeams() {
     });
 }
 
-// --- СТАРТ ИГРЫ ---
 function startGameForAll() {
-    console.log("Игра начинается! Перевод игроков из лобби в матч...");
-    
+    console.log("Игра начинается!");
+
     Object.keys(lobbyPlayers).forEach(id => {
-        gamePlayers[id] = { ...lobbyPlayers[id] };
+        gamePlayers[id] = {
+            ...lobbyPlayers[id],
+            hp: PLAYER_MAX_HP
+        };
         delete lobbyPlayers[id];
     });
 
@@ -63,7 +64,6 @@ function startGameForAll() {
     });
 }
 
-// --- СЕТЕВАЯ ЛОГИКА ---
 wss.on('connection', (ws) => {
     let playerId = null;
 
@@ -72,36 +72,35 @@ wss.on('connection', (ws) => {
             const data = JSON.parse(message);
             const room = clientRoom.get(ws);
 
-            switch(data.type) {
+            switch (data.type) {
+
                 case 'join':
                     playerId = data.id;
                     clientRoom.set(ws, 'lobby');
-                    lobbyPlayers[playerId] = { 
-                        nickname: data.nickname || "Player", 
+                    lobbyPlayers[playerId] = {
+                        nickname: data.nickname || "Player",
                         character: data.character || 1,
-                        x: data.x, y: data.y, flip: false 
+                        x: data.x, y: data.y, flip: false
                     };
-                    
+
                     const playersInLobby = {};
                     for (let id in lobbyPlayers) {
                         if (id !== playerId) playersInLobby[id] = lobbyPlayers[id];
                     }
-                    
+
                     ws.send(JSON.stringify({ type: 'init', players: playersInLobby }));
                     broadcastToRoom('lobby', { type: 'player_joined', id: playerId, ...lobbyPlayers[playerId] });
 
-                    // --- ИСПРАВЛЕННЫЙ ТАЙМЕР ---
                     const playersCount = Object.keys(lobbyPlayers).length;
                     if (playersCount >= 2 && !countdownActive) {
                         countdownActive = true;
-                        countdownValue = 15; // ВСЕГДА сбрасываем на 15 при начале отсчета
-                        
-                        console.log(`Лобби заполнено (${playersCount} чел.). Отсчет пошел.`);
+                        countdownValue = 15;
+
+                        console.log(`Лобби (${playersCount} чел.). Отсчет пошел.`);
                         broadcastToRoom('lobby', { type: 'countdown_start', time: countdownValue });
-                        
+
                         countdownInterval = setInterval(() => {
                             countdownValue--;
-                            
                             if (countdownValue <= 0) {
                                 clearInterval(countdownInterval);
                                 countdownInterval = null;
@@ -120,14 +119,14 @@ wss.on('connection', (ws) => {
                         list[playerId].x = data.x;
                         list[playerId].y = data.y;
                         list[playerId].flip = data.flip;
-                        
-                        const movePacket = JSON.stringify({ 
-                            type: 'player_moved', 
-                            id: playerId, 
-                            x: data.x, y: data.y, 
-                            flip: data.flip 
+
+                        const movePacket = JSON.stringify({
+                            type: 'player_moved',
+                            id: playerId,
+                            x: data.x, y: data.y,
+                            flip: data.flip
                         });
-                        
+
                         wss.clients.forEach(c => {
                             if (c !== ws && c.readyState === WebSocket.OPEN && clientRoom.get(c) === room) {
                                 c.send(movePacket);
@@ -140,38 +139,64 @@ wss.on('connection', (ws) => {
                     broadcastToRoom(room, { type: 'chat', nickname: data.nickname, message: data.message });
                     break;
 
-                case 'damage':
+                // --- УРОН ПО ИГРОКАМ ---
+                case 'player_damage': {
                     const attacker = gamePlayers[playerId];
                     const target = gamePlayers[data.target_id];
-                    if (attacker && target && attacker.team !== target.team) {
-                        broadcastToRoom('game', {
-                            type: 'damage',
-                            target_id: data.target_id,
-                            damage: data.damage,
-                            attacker_id: playerId
-                        });
-                    }
-                    break;
 
-                case 'town_damage':
+                    if (!attacker || !target) {
+                        console.log(`[player_damage] Не найден: attacker=${playerId}, target=${data.target_id}`);
+                        break;
+                    }
+                    if (attacker.team === target.team) {
+                        console.log(`[player_damage] Нельзя бить союзника`);
+                        break;
+                    }
+
+                    const damage = Math.min(Math.max(parseInt(data.damage) || 0, 0), 200);
+                    target.hp = Math.max(0, (target.hp ?? PLAYER_MAX_HP) - damage);
+
+                    console.log(`[player_damage] ${playerId} -> ${data.target_id}: -${damage} HP (осталось: ${target.hp})`);
+
+                    broadcastToRoom('game', {
+                        type: 'player_damage',
+                        target_id: data.target_id,
+                        damage: damage,
+                        new_hp: target.hp,
+                        attacker_id: playerId
+                    });
+                    break;
+                }
+
+                // --- УРОН ПО БАШНЯМ ---
+                case 'town_damage': {
                     if (!gamePlayers[playerId]) break;
                     const team = gamePlayers[playerId].team;
-                    // Нельзя бить свою башню
-                    if ((data.town_id === 1 && team === 1) || (data.town_id === 2 && team === 2)) break;
 
-                    if (data.town_id === 1) town1_hp = Math.max(0, town1_hp - data.damage);
-                    else town2_hp = Math.max(0, town2_hp - data.damage);
+                    if ((data.town_id === 1 && team === 1) || (data.town_id === 2 && team === 2)) {
+                        console.log(`[town_damage] Нельзя бить свою башню`);
+                        break;
+                    }
+
+                    const dmg = Math.min(Math.max(parseInt(data.damage) || 0, 0), 200);
+
+                    if (data.town_id === 1) town1_hp = Math.max(0, town1_hp - dmg);
+                    else town2_hp = Math.max(0, town2_hp - dmg);
+
+                    const new_hp = data.town_id === 1 ? town1_hp : town2_hp;
+                    console.log(`[town_damage] Башня ${data.town_id}: -${dmg} HP (осталось: ${new_hp})`);
 
                     broadcastToRoom('game', {
                         type: 'town_damage',
                         town_id: data.town_id,
-                        damage: data.damage,
-                        new_hp: data.town_id === 1 ? town1_hp : town2_hp
+                        damage: dmg,
+                        new_hp: new_hp
                     });
 
                     if (town1_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 2 });
                     else if (town2_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 1 });
                     break;
+                }
 
                 case 'level_ready':
                     if (!gamePlayers[playerId]) return;
@@ -188,7 +213,9 @@ wss.on('connection', (ws) => {
                     }));
                     break;
             }
-        } catch(e) { console.log("Ошибка обработки сообщения:", e); }
+        } catch (e) {
+            console.log("Ошибка обработки сообщения:", e);
+        }
     });
 
     ws.on('close', () => {
@@ -196,8 +223,9 @@ wss.on('connection', (ws) => {
             console.log(`Игрок ${playerId} покинул сеть.`);
             delete lobbyPlayers[playerId];
             delete gamePlayers[playerId];
-            
-            // Если в лобби стало слишком мало людей — отменяем таймер
+
+            broadcastToRoom('game', { type: 'player_left', id: playerId });
+
             if (Object.keys(lobbyPlayers).length < 2 && countdownInterval) {
                 console.log("Игрок вышел, отсчет остановлен.");
                 clearInterval(countdownInterval);
