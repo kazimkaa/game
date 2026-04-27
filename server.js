@@ -29,9 +29,10 @@ function broadcastToRoom(room, data) {
     });
 }
 
-// --- ЛОГИКА ---
+// --- ЛОГИКА КОМАНД ---
 function assignTeams() {
     const ids = Object.keys(gamePlayers);
+    // Перемешивание массива (Fisher-Yates)
     for (let i = ids.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [ids[i], ids[j]] = [ids[j], ids[i]];
@@ -41,7 +42,10 @@ function assignTeams() {
     });
 }
 
+// --- СТАРТ ИГРЫ ---
 function startGameForAll() {
+    console.log("Игра начинается! Перевод игроков из лобби в матч...");
+    
     Object.keys(lobbyPlayers).forEach(id => {
         gamePlayers[id] = { ...lobbyPlayers[id] };
         delete lobbyPlayers[id];
@@ -59,7 +63,7 @@ function startGameForAll() {
     });
 }
 
-// --- СЕТЬ ---
+// --- СЕТЕВАЯ ЛОГИКА ---
 wss.on('connection', (ws) => {
     let playerId = null;
 
@@ -79,18 +83,28 @@ wss.on('connection', (ws) => {
                     };
                     
                     const playersInLobby = {};
-                    for (let id in lobbyPlayers) if (id !== playerId) playersInLobby[id] = lobbyPlayers[id];
+                    for (let id in lobbyPlayers) {
+                        if (id !== playerId) playersInLobby[id] = lobbyPlayers[id];
+                    }
                     
                     ws.send(JSON.stringify({ type: 'init', players: playersInLobby }));
                     broadcastToRoom('lobby', { type: 'player_joined', id: playerId, ...lobbyPlayers[playerId] });
 
-                    if (Object.keys(lobbyPlayers).length >= 2 && !countdownActive) {
+                    // --- ИСПРАВЛЕННЫЙ ТАЙМЕР ---
+                    const playersCount = Object.keys(lobbyPlayers).length;
+                    if (playersCount >= 2 && !countdownActive) {
                         countdownActive = true;
+                        countdownValue = 15; // ВСЕГДА сбрасываем на 15 при начале отсчета
+                        
+                        console.log(`Лобби заполнено (${playersCount} чел.). Отсчет пошел.`);
                         broadcastToRoom('lobby', { type: 'countdown_start', time: countdownValue });
+                        
                         countdownInterval = setInterval(() => {
                             countdownValue--;
+                            
                             if (countdownValue <= 0) {
                                 clearInterval(countdownInterval);
+                                countdownInterval = null;
                                 countdownActive = false;
                                 startGameForAll();
                             } else {
@@ -107,9 +121,17 @@ wss.on('connection', (ws) => {
                         list[playerId].y = data.y;
                         list[playerId].flip = data.flip;
                         
-                        const movePacket = JSON.stringify({ type: 'player_moved', id: playerId, x: data.x, y: data.y, flip: data.flip });
+                        const movePacket = JSON.stringify({ 
+                            type: 'player_moved', 
+                            id: playerId, 
+                            x: data.x, y: data.y, 
+                            flip: data.flip 
+                        });
+                        
                         wss.clients.forEach(c => {
-                            if (c !== ws && c.readyState === WebSocket.OPEN && clientRoom.get(c) === room) c.send(movePacket);
+                            if (c !== ws && c.readyState === WebSocket.OPEN && clientRoom.get(c) === room) {
+                                c.send(movePacket);
+                            }
                         });
                     }
                     break;
@@ -118,7 +140,7 @@ wss.on('connection', (ws) => {
                     broadcastToRoom(room, { type: 'chat', nickname: data.nickname, message: data.message });
                     break;
 
-                case 'damage': // ВОЗВРАЩЕНО ПвП
+                case 'damage':
                     const attacker = gamePlayers[playerId];
                     const target = gamePlayers[data.target_id];
                     if (attacker && target && attacker.team !== target.team) {
@@ -134,6 +156,7 @@ wss.on('connection', (ws) => {
                 case 'town_damage':
                     if (!gamePlayers[playerId]) break;
                     const team = gamePlayers[playerId].team;
+                    // Нельзя бить свою башню
                     if ((data.town_id === 1 && team === 1) || (data.town_id === 2 && team === 2)) break;
 
                     if (data.town_id === 1) town1_hp = Math.max(0, town1_hp - data.damage);
@@ -153,7 +176,9 @@ wss.on('connection', (ws) => {
                 case 'level_ready':
                     if (!gamePlayers[playerId]) return;
                     const others = {};
-                    for (let id in gamePlayers) if (id !== playerId) others[id] = gamePlayers[id];
+                    for (let id in gamePlayers) {
+                        if (id !== playerId) others[id] = gamePlayers[id];
+                    }
                     ws.send(JSON.stringify({
                         type: 'init_game',
                         players: others,
@@ -163,19 +188,28 @@ wss.on('connection', (ws) => {
                     }));
                     break;
             }
-        } catch(e) { console.log(e); }
+        } catch(e) { console.log("Ошибка обработки сообщения:", e); }
     });
 
     ws.on('close', () => {
         if (playerId) {
+            console.log(`Игрок ${playerId} покинул сеть.`);
             delete lobbyPlayers[playerId];
             delete gamePlayers[playerId];
+            
+            // Если в лобби стало слишком мало людей — отменяем таймер
             if (Object.keys(lobbyPlayers).length < 2 && countdownInterval) {
+                console.log("Игрок вышел, отсчет остановлен.");
                 clearInterval(countdownInterval);
+                countdownInterval = null;
                 countdownActive = false;
+                broadcastToRoom('lobby', { type: 'countdown_cancel' });
             }
         }
     });
 });
 
-server.listen(process.env.PORT || 2567, '0.0.0.0');
+const PORT = process.env.PORT || 2567;
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Сервер запущен на порту ${PORT}`);
+});
