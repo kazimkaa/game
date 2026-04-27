@@ -8,21 +8,22 @@ const wss = new WebSocket.Server({ server });
 
 const lobbyPlayers = {};
 const gamePlayers = {};
-const clientRoom = new Map();
+const clientRoom = new Map(); // Хранит состояние каждого клиента: 'lobby' или 'game'
 
+// Состояние башен
 let town1_hp = 1000;
 let town2_hp = 1000;
 
+// Таймер
 let countdownActive = false;
-let countdownValue = 60;
+let countdownValue = 15; // Можно изменить на 60
 let countdownInterval = null;
 
-app.get('/', (req, res) => res.send('Server is running!'));
+app.get('/', (req, res) => res.send('Game Server is Online!'));
 
-// --- УТИЛИТЫ РАССЫЛКИ ---
+// --- ФУНКЦИИ РАССЫЛКИ ---
 
-// Универсальная функция рассылки по комнатам
-function broadcast(room, data) {
+function broadcastToRoom(room, data) {
     const packet = JSON.stringify(data);
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === room) {
@@ -31,14 +32,10 @@ function broadcast(room, data) {
     });
 }
 
-function broadcastToLobby(data) { broadcast('lobby', data); }
-function broadcastToGame(data) { broadcast('game', data); }
-
 // --- ЛОГИКА ИГРЫ ---
 
 function assignTeams() {
     const ids = Object.keys(gamePlayers);
-    // Перемешивание Фишера-Йетса
     for (let i = ids.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [ids[i], ids[j]] = [ids[j], ids[i]];
@@ -53,9 +50,8 @@ function startCountdown() {
     if (countdownActive || Object.keys(lobbyPlayers).length < 2) return;
     
     countdownActive = true;
-    countdownValue = 15; // Уменьшил для тестов, поставь 60 если нужно
-
-    broadcastToLobby({ type: 'countdown_start', time: countdownValue });
+    countdownValue = 15; 
+    broadcastToRoom('lobby', { type: 'countdown_start', time: countdownValue });
     
     countdownInterval = setInterval(() => {
         countdownValue--;
@@ -64,7 +60,7 @@ function startCountdown() {
             countdownActive = false;
             startGameForAll();
         } else {
-            broadcastToLobby({ type: 'countdown_update', time: countdownValue });
+            broadcastToRoom('lobby', { type: 'countdown_update', time: countdownValue });
         }
     }, 1000);
 }
@@ -72,7 +68,7 @@ function startCountdown() {
 function cancelCountdown() {
     if (countdownInterval) clearInterval(countdownInterval);
     countdownActive = false;
-    broadcastToLobby({ type: 'countdown_cancel' });
+    broadcastToRoom('lobby', { type: 'countdown_cancel' });
 }
 
 function startGameForAll() {
@@ -106,7 +102,6 @@ wss.on('connection', (ws) => {
             switch(data.type) {
                 case 'join':
                     playerId = data.id;
-                    ws.playerId = playerId;
                     clientRoom.set(ws, 'lobby');
                     
                     lobbyPlayers[playerId] = { 
@@ -115,15 +110,15 @@ wss.on('connection', (ws) => {
                         x: data.x, y: data.y, flip: false 
                     };
 
-                    // Отправляем новичку список тех, кто уже в лобби
-                    const currentPlayers = {};
+                    // Инициализация для вошедшего
+                    const currentOnlines = {};
                     for (let id in lobbyPlayers) {
-                        if (id !== playerId) currentPlayers[id] = lobbyPlayers[id];
+                        if (id !== playerId) currentOnlines[id] = lobbyPlayers[id];
                     }
-                    ws.send(JSON.stringify({ type: 'init', players: currentPlayers }));
+                    ws.send(JSON.stringify({ type: 'init', players: currentOnlines }));
 
-                    // Оповещаем остальных
-                    broadcastToLobby({
+                    // Оповещение остальных в лобби
+                    broadcastToRoom('lobby', {
                         type: 'player_joined',
                         id: playerId,
                         ...lobbyPlayers[playerId]
@@ -134,59 +129,81 @@ wss.on('connection', (ws) => {
 
                 case 'move':
                     const room = clientRoom.get(ws);
-                    const list = room === 'lobby' ? lobbyPlayers : gamePlayers;
-                    if (list[playerId]) {
-                        list[playerId].x = data.x;
-                        list[playerId].y = data.y;
-                        list[playerId].flip = data.flip;
+                    const playersList = room === 'lobby' ? lobbyPlayers : gamePlayers;
+                    
+                    if (playersList[playerId]) {
+                        playersList[playerId].x = data.x;
+                        playersList[playerId].y = data.y;
+                        playersList[playerId].flip = data.flip;
                         
-                        // Рассылаем позицию только игрокам в той же комнате
-                        const movePacket = JSON.stringify({ type: 'player_moved', id: playerId, x: data.x, y: data.y, flip: data.flip });
+                        // Рассылаем только тем, кто в той же "комнате"
+                        const moveData = JSON.stringify({ 
+                            type: 'player_moved', id: playerId, x: data.x, y: data.y, flip: data.flip 
+                        });
                         wss.clients.forEach(c => {
-                            if (c !== ws && clientRoom.get(c) === room) c.send(movePacket);
+                            if (c !== ws && c.readyState === WebSocket.OPEN && clientRoom.get(c) === room) {
+                                c.send(moveData);
+                            }
                         });
                     }
                     break;
 
                 case 'chat':
-                    // ГЛАВНОЕ ИСПРАВЛЕНИЕ: Чат работает и в лобби, и в игре
-                    const chatPacket = {
-                        type: 'chat',
-                        nickname: data.nickname,
-                        message: data.message
-                    };
-                    const currentRoom = clientRoom.get(ws);
-                    if (currentRoom === 'lobby') broadcastToLobby(chatPacket);
-                    else broadcastToGame(chatPacket);
+                    // ИСПРАВЛЕНО: Рассылка идет в ту комнату, где находится отправитель
+                    const roomType = clientRoom.get(ws);
+                    if (roomType) {
+                        broadcastToRoom(roomType, {
+                            type: 'chat',
+                            nickname: data.nickname,
+                            message: data.message
+                        });
+                    }
+                    break;
+
+                case 'level_ready':
+                    if (!gamePlayers[playerId]) return;
+                    
+                    const otherInGame = {};
+                    for (let id in gamePlayers) {
+                        if (id !== playerId) otherInGame[id] = gamePlayers[id];
+                    }
+                    
+                    ws.send(JSON.stringify({
+                        type: 'init_game',
+                        players: otherInGame,
+                        my_team: gamePlayers[playerId].team,
+                        town1_hp: town1_hp,
+                        town2_hp: town2_hp
+                    }));
                     break;
 
                 case 'town_damage':
                     if (!gamePlayers[playerId]) break;
-                    const team = gamePlayers[playerId].team;
-                    if ((data.town_id === 1 && team === 1) || (data.town_id === 2 && team === 2)) break;
+                    const attackerTeam = gamePlayers[playerId].team;
+                    
+                    // Защита от урона по своей башне
+                    if ((data.town_id === 1 && attackerTeam === 1) || (data.town_id === 2 && attackerTeam === 2)) break;
 
                     if (data.town_id === 1) town1_hp = Math.max(0, town1_hp - data.damage);
                     else town2_hp = Math.max(0, town2_hp - data.damage);
 
-                    broadcastToGame({
+                    broadcastToRoom('game', {
                         type: 'town_damage',
                         town_id: data.town_id,
                         damage: data.damage,
                         new_hp: data.town_id === 1 ? town1_hp : town2_hp
                     });
 
-                    if (town1_hp <= 0) broadcastToGame({ type: 'game_over', winner: 2 });
-                    else if (town2_hp <= 0) broadcastToGame({ type: 'game_over', winner: 1 });
+                    if (town1_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 2 });
+                    else if (town2_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 1 });
                     break;
 
                 case 'reset_room':
-                    if (clientRoom.get(ws) === 'lobby') {
-                        cancelCountdown();
-                        ws.send(JSON.stringify({ type: 'room_reset' }));
-                    }
+                    cancelCountdown();
+                    ws.send(JSON.stringify({ type: 'room_reset' }));
                     break;
             }
-        } catch(e) { console.error("Socket error:", e); }
+        } catch(e) { console.error("Error:", e); }
     });
 
     ws.on('close', () => {
@@ -200,4 +217,4 @@ wss.on('connection', (ws) => {
 });
 
 const PORT = process.env.PORT || 2567;
-server.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server on port ${PORT}`));
+server.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server running on port ${PORT}`));
