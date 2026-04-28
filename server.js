@@ -19,6 +19,11 @@ let countdownActive = false;
 let countdownValue = 15;
 let countdownInterval = null;
 
+// ✅ ТАЙМЕР ИГРЫ
+let gameTimerActive = false;
+let gameTimeLeft = 300; // 5 минут
+let gameTimerInterval = null;
+
 const PLAYER_MAX_HP = 100;
 
 app.get('/', (req, res) => res.send('Multiplayer Server Active'));
@@ -73,6 +78,9 @@ function startGameForAll() {
     town1_hp = 1000;
     town2_hp = 1000;
     
+    // ✅ ЗАПУСКАЕМ ТАЙМЕР ИГРЫ
+    startGameTimer();
+    
     // Спавн крипов
     spawnCreep(1); spawnCreep(2);
     if (global.creepSpawnInterval) clearInterval(global.creepSpawnInterval);
@@ -84,6 +92,44 @@ function startGameForAll() {
             client.send(JSON.stringify({ type: 'start_game' }));
         }
     });
+}
+
+// ✅ ФУНКЦИИ ТАЙМЕРА ИГРЫ
+function startGameTimer() {
+    gameTimeLeft = 300; // 5 минут
+    gameTimerActive = true;
+    
+    if (gameTimerInterval) clearInterval(gameTimerInterval);
+    
+    gameTimerInterval = setInterval(() => {
+        if (!gameTimerActive) {
+            clearInterval(gameTimerInterval);
+            return;
+        }
+        
+        gameTimeLeft--;
+        
+        // Отправляем обновление времени всем игрокам
+        broadcastToRoom('game', { 
+            type: 'game_timer_update', 
+            time_left: gameTimeLeft 
+        });
+        
+        // Проверка окончания времени
+        if (gameTimeLeft <= 0) {
+            gameTimerActive = false;
+            clearInterval(gameTimerInterval);
+            
+            console.log("Game time ended - DRAW!");
+            broadcastToRoom('game', { 
+                type: 'game_over', 
+                winner: 0, // 0 = ничья
+                reason: 'time_out' 
+            });
+        }
+    }, 1000);
+    
+    console.log("Game timer started: 5 minutes");
 }
 
 wss.on('connection', (ws) => {
