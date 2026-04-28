@@ -41,7 +41,7 @@ function spawnCreep(team) {
         team: team, 
         x: (team === 1 ? 300 : 1600), 
         y: 450, 
-        hp: 200 
+        hp: 20 
     };
     broadcastToRoom('game', { type: 'creep_spawn', ...creeps[creepId] });
 }
