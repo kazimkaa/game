@@ -9,8 +9,8 @@ const wss = new WebSocket.Server({ server });
 const lobbyPlayers = {};
 const gamePlayers = {};
 const clientRoom = new Map();
-const creeps = {}; // НОВОЕ: хранилище крипов
-let creepIdCounter = 0; // НОВОЕ: счетчик для уникальных ID крипов
+const creeps = {};
+let creepIdCounter = 0;
 
 let town1_hp = 1000;
 let town2_hp = 1000;
@@ -32,7 +32,6 @@ function broadcastToRoom(room, data) {
     });
 }
 
-// НОВОЕ: Функция спавна крипа
 function spawnCreep(team) {
     creepIdCounter++;
     const creepId = `creep_${creepIdCounter}`;
@@ -41,7 +40,7 @@ function spawnCreep(team) {
         team: team, 
         x: (team === 1 ? 300 : 1600), 
         y: 450, 
-        hp: 20 
+        hp: 30 
     };
     broadcastToRoom('game', { type: 'creep_spawn', ...creeps[creepId] });
 }
@@ -54,22 +53,30 @@ function assignTeams() {
     }
     ids.forEach((id, i) => {
         gamePlayers[id].team = (i < Math.ceil(ids.length / 2)) ? 1 : 2;
+        gamePlayers[id].hp = PLAYER_MAX_HP; // Убедимся что HP установлено
+        gamePlayers[id].is_dead = false;
     });
 }
 
 function startGameForAll() {
     console.log("Игра начинается!");
     Object.keys(lobbyPlayers).forEach(id => {
-        gamePlayers[id] = { ...lobbyPlayers[id], hp: PLAYER_MAX_HP };
+        gamePlayers[id] = { 
+            ...lobbyPlayers[id], 
+            hp: PLAYER_MAX_HP,
+            is_dead: false,
+            team: 0 // Будет установлен в assignTeams
+        };
         delete lobbyPlayers[id];
     });
     assignTeams();
     town1_hp = 1000;
     town2_hp = 1000;
     
-    // НОВОЕ: Запуск цикла спавна крипов каждые 30 секунд
+    // Спавн крипов
     spawnCreep(1); spawnCreep(2);
-    setInterval(() => { spawnCreep(1); spawnCreep(2); }, 30000);
+    if (global.creepSpawnInterval) clearInterval(global.creepSpawnInterval);
+    global.creepSpawnInterval = setInterval(() => { spawnCreep(1); spawnCreep(2); }, 30000);
 
     wss.clients.forEach(client => {
         if (clientRoom.get(client) === 'lobby') {
@@ -91,9 +98,19 @@ wss.on('connection', (ws) => {
                 case 'join':
                     playerId = data.id;
                     clientRoom.set(ws, 'lobby');
-                    lobbyPlayers[playerId] = { nickname: data.nickname || "Player", character: data.character || 1, x: data.x, y: data.y, flip: false };
+                    lobbyPlayers[playerId] = { 
+                        nickname: data.nickname || "Player", 
+                        character: data.character || 1, 
+                        x: data.x, 
+                        y: data.y, 
+                        flip: false,
+                        hp: PLAYER_MAX_HP,
+                        is_dead: false
+                    };
                     const playersInLobby = {};
-                    for (let id in lobbyPlayers) { if (id !== playerId) playersInLobby[id] = lobbyPlayers[id]; }
+                    for (let id in lobbyPlayers) { 
+                        if (id !== playerId) playersInLobby[id] = lobbyPlayers[id]; 
+                    }
                     ws.send(JSON.stringify({ type: 'init', players: playersInLobby }));
                     broadcastToRoom('lobby', { type: 'player_joined', id: playerId, ...lobbyPlayers[playerId] });
 
@@ -114,9 +131,21 @@ wss.on('connection', (ws) => {
                 case 'move':
                     const list = room === 'lobby' ? lobbyPlayers : gamePlayers;
                     if (list[playerId]) {
-                        list[playerId].x = data.x; list[playerId].y = data.y; list[playerId].flip = data.flip;
-                        const movePacket = JSON.stringify({ type: 'player_moved', id: playerId, x: data.x, y: data.y, flip: data.flip });
-                        wss.clients.forEach(c => { if (c !== ws && c.readyState === WebSocket.OPEN && clientRoom.get(c) === room) c.send(movePacket); });
+                        list[playerId].x = data.x; 
+                        list[playerId].y = data.y; 
+                        list[playerId].flip = data.flip;
+                        const movePacket = JSON.stringify({ 
+                            type: 'player_moved', 
+                            id: playerId, 
+                            x: data.x, 
+                            y: data.y, 
+                            flip: data.flip 
+                        });
+                        wss.clients.forEach(c => { 
+                            if (c !== ws && c.readyState === WebSocket.OPEN && clientRoom.get(c) === room) {
+                                c.send(movePacket);
+                            }
+                        });
                     }
                     break;
 
@@ -130,18 +159,29 @@ wss.on('connection', (ws) => {
                     if (!attacker || !target || attacker.team === target.team || target.is_dead) break;
                     const damage = Math.min(Math.max(parseInt(data.damage) || 0, 0), 200);
                     target.hp = Math.max(0, (target.hp ?? PLAYER_MAX_HP) - damage);
-                    broadcastToRoom('game', { type: 'player_damage', target_id: data.target_id, damage: damage, new_hp: target.hp, attacker_id: playerId });
-                    if (target.hp <= 0) { target.is_dead = true; }
+                    broadcastToRoom('game', { 
+                        type: 'player_damage', 
+                        target_id: data.target_id, 
+                        damage: damage, 
+                        new_hp: target.hp, 
+                        attacker_id: playerId 
+                    });
+                    if (target.hp <= 0) { 
+                        target.is_dead = true;
+                        console.log(`Player ${data.target_id} died. HP: ${target.hp}`);
+                    }
                     break;
                 }
 
-                // НОВОЕ: Обработка урона по крипам
                 case 'creep_damage': {
                     const c = creeps[data.creep_id];
                     if (c) {
                         c.hp -= data.damage;
                         broadcastToRoom('game', { type: 'creep_damage', id: data.creep_id, new_hp: c.hp });
-                        if (c.hp <= 0) { delete creeps[data.creep_id]; broadcastToRoom('game', { type: 'creep_destroy', id: data.creep_id }); }
+                        if (c.hp <= 0) { 
+                            delete creeps[data.creep_id]; 
+                            broadcastToRoom('game', { type: 'creep_destroy', id: data.creep_id }); 
+                        }
                     }
                     break;
                 }
@@ -161,19 +201,70 @@ wss.on('connection', (ws) => {
                 }
 
                 case 'respawn': {
-                    if (!gamePlayers[playerId]) break;
-                    gamePlayers[playerId].hp = PLAYER_MAX_HP; gamePlayers[playerId].is_dead = false;
+                    if (!gamePlayers[playerId]) {
+                        console.log(`Respawn failed: player ${playerId} not found in gamePlayers`);
+                        break;
+                    }
+                    
+                    console.log(`Player ${playerId} respawning...`);
+                    gamePlayers[playerId].hp = PLAYER_MAX_HP; 
+                    gamePlayers[playerId].is_dead = false;
                     const team = gamePlayers[playerId].team;
                     const spawnX = team === 1 ? 300 : 1600;
-                    broadcastToRoom('game', { type: 'respawn', id: playerId, x: spawnX, y: 450, hp: PLAYER_MAX_HP });
+                    gamePlayers[playerId].x = spawnX;
+                    gamePlayers[playerId].y = 450;
+                    
+                    console.log(`Respawn data: id=${playerId}, hp=${PLAYER_MAX_HP}, x=${spawnX}, y=450`);
+                    
+                    broadcastToRoom('game', { 
+                        type: 'respawn', 
+                        id: playerId, 
+                        x: spawnX, 
+                        y: 450, 
+                        hp: PLAYER_MAX_HP 
+                    });
                     break;
                 }
 
                 case 'level_ready':
-                    if (!gamePlayers[playerId]) return;
+                    if (!gamePlayers[playerId]) {
+                        console.log(`Level ready failed: player ${playerId} not found in gamePlayers`);
+                        return;
+                    }
+                    
                     const others = {};
-                    for (let id in gamePlayers) { if (id !== playerId) others[id] = gamePlayers[id]; }
-                    ws.send(JSON.stringify({ type: 'init_game', players: others, my_team: gamePlayers[playerId].team, town1_hp, town2_hp }));
+                    for (let id in gamePlayers) { 
+                        if (id !== playerId) {
+                            others[id] = {
+                                nickname: gamePlayers[id].nickname,
+                                character: gamePlayers[id].character,
+                                x: gamePlayers[id].x,
+                                y: gamePlayers[id].y,
+                                flip: gamePlayers[id].flip,
+                                hp: gamePlayers[id].hp,
+                                is_dead: gamePlayers[id].is_dead,
+                                team: gamePlayers[id].team
+                            };
+                        }
+                    }
+                    
+                    // Отправляем полную информацию о текущем состоянии
+                    const currentCreeps = {};
+                    for (let id in creeps) currentCreeps[id] = creeps[id];
+                    
+                    ws.send(JSON.stringify({ 
+                        type: 'init_game', 
+                        players: others, 
+                        my_team: gamePlayers[playerId].team,
+                        my_hp: gamePlayers[playerId].hp,
+                        my_x: gamePlayers[playerId].x,
+                        my_y: gamePlayers[playerId].y,
+                        town1_hp, 
+                        town2_hp,
+                        creeps: currentCreeps
+                    }));
+                    
+                    console.log(`Level ready sent to ${playerId}: hp=${gamePlayers[playerId].hp}, team=${gamePlayers[playerId].team}`);
                     break;
             }
         } catch (e) { console.log("Ошибка:", e); }
@@ -181,7 +272,8 @@ wss.on('connection', (ws) => {
 
     ws.on('close', () => {
         if (playerId) {
-            delete lobbyPlayers[playerId]; delete gamePlayers[playerId];
+            delete lobbyPlayers[playerId]; 
+            delete gamePlayers[playerId];
             broadcastToRoom('game', { type: 'player_left', id: playerId });
             if (Object.keys(lobbyPlayers).length < 2 && countdownInterval) {
                 clearInterval(countdownInterval); countdownInterval = null; countdownActive = false;
