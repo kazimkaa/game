@@ -157,7 +157,7 @@ wss.on('connection', (ws) => {
             
             // Handle join message first (before checking playerId)
             if (message.type === 'join') {
-                playerId = message.id;
+                let playerId = message.id;
                 console.log("Player " + playerId + " (" + message.nickname + ") joined lobby");
                 clientRoom.set(ws, 'lobby');
                 lobbyPlayers[playerId] = { nickname: message.nickname || "Player", character: message.character || 1, x: message.x, y: message.y, flip: false };
