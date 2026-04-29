@@ -157,9 +157,7 @@ wss.on('connection', (ws) => {
             const playerId = clientRoom.get(ws);
             if (!playerId) return;
             
-            // Basic debug - log all message types
-            console.log("Received message type: " + message.type + " from player: " + playerId);
-
+            
             switch (message.type) {
                 case 'join':
                     playerId = message.id;
@@ -275,7 +273,7 @@ wss.on('connection', (ws) => {
                     // Отправляем информацию о текущих крипах
                     const currentCreeps = {};
                     for (let id in creeps) currentCreeps[id] = creeps[id];
-                    ws.send(JSON.stringify({ type: 'init_game', players: others, my_team: gamePlayers[playerId].team, town1_hp, town2_hp, barracks1_hp, barracks2_hp, creeps: currentCreeps }));
+                    ws.send(JSON.stringify({ type: 'init_game', players: others, my_team: gamePlayers[playerId].team, town1_hp, town2_hp, creeps: currentCreeps }));
                     break;
             }
         } catch (e) { console.log("Ошибка:", e); }
