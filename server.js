@@ -151,16 +151,20 @@ function startGameForAll() {
 wss.on('connection', (ws) => {
     let playerId = null;
 
-    ws.on('message', (message) => {
+    ws.on('message', data => {
         try {
-            const data = JSON.parse(message);
-            const room = clientRoom.get(ws);
+            const message = JSON.parse(data);
+            const playerId = clientRoom.get(ws);
+            if (!playerId) return;
+            
+            // Basic debug - log all message types
+            console.log("Received message type: " + message.type + " from player: " + playerId);
 
-            switch (data.type) {
+            switch (message.type) {
                 case 'join':
-                    playerId = data.id;
+                    playerId = message.id;
                     clientRoom.set(ws, 'lobby');
-                    lobbyPlayers[playerId] = { nickname: data.nickname || "Player", character: data.character || 1, x: data.x, y: data.y, flip: false };
+                    lobbyPlayers[playerId] = { nickname: message.nickname || "Player", character: message.character || 1, x: message.x, y: message.y, flip: false };
                     const playersInLobby = {};
                     for (let id in lobbyPlayers) { if (id !== playerId) playersInLobby[id] = lobbyPlayers[id]; }
                     ws.send(JSON.stringify({ type: 'init', players: playersInLobby }));
