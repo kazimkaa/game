@@ -16,6 +16,12 @@ let creepSpawnInterval = null; // ИСПРАВЛЕНО: один интерва�
 let town1_hp = 1000;
 let town2_hp = 1000;
 
+// Barracks state
+let barracks1_hp = 500;
+let barracks2_hp = 500;
+let barracks1_destroyed = false;
+let barracks2_destroyed = false;
+
 let countdownActive = false;
 let countdownValue = 15;
 let countdownInterval = null;
@@ -36,6 +42,7 @@ function broadcastToRoom(room, data) {
 
 // Функция спавна крипа
 function spawnCreep(team) {
+    if ((team === 1 && barracks1_destroyed) || (team === 2 && barracks2_destroyed)) return; // Check if barracks is destroyed
     creepIdCounter++;
     const creepId = `creep_${creepIdCounter}`;
     creeps[creepId] = { 
@@ -208,6 +215,31 @@ wss.on('connection', (ws) => {
                     broadcastToRoom('game', { type: 'town_damage', town_id: data.town_id, damage: dmg, new_hp: new_hp });
                     if (town1_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 2 });
                     else if (town2_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 1 });
+                    break;
+                }
+
+                case 'barracks_damage': {
+                    if (!gamePlayers[playerId]) break;
+                    const team = gamePlayers[playerId].team;
+                    if ((data.barracks_id === 1 && team === 1) || (data.barracks_id === 2 && team === 2)) break;
+                    const dmg = Math.min(Math.max(parseInt(data.damage) || 0, 0), 200);
+                    if (data.barracks_id === 1) {
+                        barracks1_hp = Math.max(0, barracks1_hp - dmg);
+                        if (barracks1_hp <= 0 && !barracks1_destroyed) {
+                            barracks1_destroyed = true;
+                            broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 1 });
+                            console.log("Barracks 1 destroyed!");
+                        }
+                    } else {
+                        barracks2_hp = Math.max(0, barracks2_hp - dmg);
+                        if (barracks2_hp <= 0 && !barracks2_destroyed) {
+                            barracks2_destroyed = true;
+                            broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 2 });
+                            console.log("Barracks 2 destroyed!");
+                        }
+                    }
+                    const new_hp = data.barracks_id === 1 ? barracks1_hp : barracks2_hp;
+                    broadcastToRoom('game', { type: 'barracks_damage', barracks_id: data.barracks_id, damage: dmg, new_hp: new_hp });
                     break;
                 }
 
