@@ -9,9 +9,9 @@ const wss = new WebSocket.Server({ server });
 const lobbyPlayers = {};
 const gamePlayers = {};
 const clientRoom = new Map();
-const creeps = {}; // хранилище крипов
-let creepIdCounter = 0; // счетчик для уникальных ID крипов
-let creepSpawnInterval = null; // ИСПРАВЛЕНО: один интервал для всех игр
+const creeps = {}; // storage for creeps
+let creepIdCounter = 0; // unique ID counter for creeps
+let creepSpawnInterval = null; // FIXED: one interval for all games
 
 let town1_hp = 1000;
 let town2_hp = 1000;
@@ -29,7 +29,7 @@ let countdownInterval = null;
 const PLAYER_MAX_HP = 100;
 
 app.get('/', (req, res) => res.send('Multiplayer Server Active'));
-app.use(express.static('public')); // Добавляем статические файлы
+app.use(express.static('public')); // Add static files
 
 function broadcastToRoom(room, data) {
     const packet = JSON.stringify(data);
@@ -43,7 +43,7 @@ function broadcastToRoom(room, data) {
     console.log("Broadcast to room '" + room + "' sent to " + sentCount + " clients. Data: " + data.type);
 }
 
-// Функция спавна крипа
+// Function to spawn creep
 function spawnCreep(team) {
     if ((team === 1 && barracks1_destroyed) || (team === 2 && barracks2_destroyed)) {
         console.log("Cannot spawn creep for team " + team + " - barracks destroyed!");
@@ -64,37 +64,17 @@ function spawnCreep(team) {
     broadcastToRoom('game', { type: 'creep_spawn', ...creeps[creepId] });
 }
 
-// НОВОЕ: Функция движения крипов
+// NEW: Function to move creeps
 function moveCreeps() {
     for (let creepId in creeps) {
         const creep = creeps[creepId];
-        
-        // Движение к цели
-        const dx = creep.targetX - creep.x;
-        if (Math.abs(dx) > creep.speed) {
-            creep.x += (dx > 0 ? creep.speed : -creep.speed);
-            broadcastToRoom('game', { type: 'creep_move', id: creepId, x: creep.x, y: creep.y });
-        } else {
-            // Крип достиг цели - наносит урон городу
-            const targetTown = creep.team === 1 ? 2 : 1;
-            const damage = 10;
-            
-            if (targetTown === 1) {
-                town1_hp = Math.max(0, town1_hp - damage);
-                broadcastToRoom('game', { type: 'town_damage', town_id: 1, damage: damage, new_hp: town1_hp });
-            } else {
-                town2_hp = Math.max(0, town2_hp - damage);
-                broadcastToRoom('game', { type: 'town_damage', town_id: 2, damage: damage, new_hp: town2_hp });
-            }
-            
-            // Удаляем крип после атаки
-            delete creeps[creepId];
-            broadcastToRoom('game', { type: 'creep_destroy', id: creepId });
-            
-            // Проверка победы
-            if (town1_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 2 });
-            else if (town2_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 1 });
+        // Simple movement towards target
+        if (creep.x < creep.targetX) {
+            creep.x += creep.speed;
+        } else if (creep.x > creep.targetX) {
+            creep.x -= creep.speed;
         }
+        broadcastToRoom('game', { type: 'creep_move', id: creepId, x: creep.x, y: creep.y });
     }
 }
 
@@ -110,7 +90,7 @@ function assignTeams() {
 }
 
 function startGameForAll() {
-    console.log("Игра начинается!");
+    console.log("Game starting!");
     Object.keys(lobbyPlayers).forEach(id => {
         gamePlayers[id] = { ...lobbyPlayers[id], hp: PLAYER_MAX_HP };
         delete lobbyPlayers[id];
@@ -125,24 +105,24 @@ function startGameForAll() {
     barracks1_destroyed = false;
     barracks2_destroyed = false;
     
-    // Очищаем старых крипов
+    // Clear old creeps
     for (let id in creeps) delete creeps[id];
     
-    // ИСПРАВЛЕНО: Создаем только один интервал для всей игры
+    // FIXED: Create only one interval for entire game
     if (creepSpawnInterval) clearInterval(creepSpawnInterval);
     
-    // Спавним первых крипов
+    // Spawn first creeps
     spawnCreep(1); spawnCreep(2);
     
-    // Запускаем спавн крипов каждые 30 секунд
-    creepSpawnInterval = setInterval(() => { 
-        spawnCreep(1); spawnCreep(2); 
+    // Start creep spawning every 30 seconds for both teams
+    creepSpawnInterval = setInterval(() => {
+        spawnCreep(1); spawnCreep(2);
     }, 30000);
     
-    // Запускаем движение крипов каждые 100мс
-    if (global.creepMoveInterval) clearInterval(global.creepMoveInterval);
-    global.creepMoveInterval = setInterval(moveCreeps, 100);
-
+    // Start creep movement every 100ms
+    setInterval(moveCreeps, 100);
+    
+    // Move all players to game room
     wss.clients.forEach(client => {
         if (clientRoom.get(client) === 'lobby') {
             clientRoom.set(client, 'game');
@@ -152,72 +132,80 @@ function startGameForAll() {
 }
 
 wss.on('connection', (ws) => {
+    console.log("New WebSocket connection established. Total clients: " + wss.clients.size);
     let playerId = null;
 
     ws.on('message', data => {
         try {
             const message = JSON.parse(data);
-            const playerId = clientRoom.get(ws);
-            if (!playerId) return;
+            console.log("Received message: " + message.type + " from client");
             
+            // Handle join message first (before checking playerId)
+            if (message.type === 'join') {
+                playerId = message.id;
+                console.log("Player " + playerId + " (" + message.nickname + ") joined lobby");
+                clientRoom.set(ws, 'lobby');
+                lobbyPlayers[playerId] = { nickname: message.nickname || "Player", character: message.character || 1, x: message.x, y: message.y, flip: false };
+                const playersInLobby = {};
+                for (let id in lobbyPlayers) { if (id !== playerId) playersInLobby[id] = lobbyPlayers[id]; }
+                console.log("Sending init to " + playerId + " with " + Object.keys(playersInLobby).length + " other players");
+                ws.send(JSON.stringify({ type: 'init', players: playersInLobby }));
+                console.log("Broadcasting player_joined to lobby room. Total players: " + Object.keys(lobbyPlayers).length);
+                broadcastToRoom('lobby', { type: 'player_joined', id: playerId, ...lobbyPlayers[playerId] });
+
+                const playersCount = Object.keys(lobbyPlayers).length;
+                if (playersCount >= 2 && !countdownActive) {
+                    countdownActive = true; countdownValue = 15;
+                    broadcastToRoom('lobby', { type: 'countdown_start', time: countdownValue });
+                    countdownInterval = setInterval(() => {
+                        countdownValue--;
+                        if (countdownValue <= 0) {
+                            clearInterval(countdownInterval); countdownInterval = null; countdownActive = false;
+                            startGameForAll();
+                        } else { broadcastToRoom('lobby', { type: 'countdown_update', time: countdownValue }); }
+                    }, 1000);
+                }
+                return;
+            }
+            
+            const playerId = clientRoom.get(ws);
+            if (!playerId) {
+                console.log("No playerId found for this client, message type: " + message.type);
+                return;
+            }
             
             switch (message.type) {
-                case 'join':
-                    playerId = message.id;
-                    console.log("Player " + playerId + " (" + message.nickname + ") joined lobby");
-                    clientRoom.set(ws, 'lobby');
-                    lobbyPlayers[playerId] = { nickname: message.nickname || "Player", character: message.character || 1, x: message.x, y: message.y, flip: false };
-                    const playersInLobby = {};
-                    for (let id in lobbyPlayers) { if (id !== playerId) playersInLobby[id] = lobbyPlayers[id]; }
-                    console.log("Sending init to " + playerId + " with " + Object.keys(playersInLobby).length + " other players");
-                    ws.send(JSON.stringify({ type: 'init', players: playersInLobby }));
-                    console.log("Broadcasting player_joined to lobby room. Total players: " + Object.keys(lobbyPlayers).length);
-                    broadcastToRoom('lobby', { type: 'player_joined', id: playerId, ...lobbyPlayers[playerId] });
-
-                    const playersCount = Object.keys(lobbyPlayers).length;
-                    if (playersCount >= 2 && !countdownActive) {
-                        countdownActive = true; countdownValue = 15;
-                        broadcastToRoom('lobby', { type: 'countdown_start', time: countdownValue });
-                        countdownInterval = setInterval(() => {
-                            countdownValue--;
-                            if (countdownValue <= 0) {
-                                clearInterval(countdownInterval); countdownInterval = null; countdownActive = false;
-                                startGameForAll();
-                            } else { broadcastToRoom('lobby', { type: 'countdown_update', time: countdownValue }); }
-                        }, 1000);
-                    }
-                    break;
-
                 case 'move':
-                    const list = room === 'lobby' ? lobbyPlayers : gamePlayers;
+                    const list = clientRoom.get(ws) === 'lobby' ? lobbyPlayers : gamePlayers;
                     if (list[playerId]) {
-                        list[playerId].x = data.x; list[playerId].y = data.y; list[playerId].flip = data.flip;
-                        const movePacket = JSON.stringify({ type: 'player_moved', id: playerId, x: data.x, y: data.y, flip: data.flip });
-                        wss.clients.forEach(c => { if (c !== ws && c.readyState === WebSocket.OPEN && clientRoom.get(c) === room) c.send(movePacket); });
+                        list[playerId].x = message.x; list[playerId].y = message.y; list[playerId].flip = message.flip;
+                        const movePacket = JSON.stringify({ type: 'player_moved', id: playerId, x: message.x, y: message.y, flip: message.flip });
+                        wss.clients.forEach(c => { if (c !== ws && c.readyState === WebSocket.OPEN && clientRoom.get(c) === clientRoom.get(ws)) c.send(movePacket); });
                     }
                     break;
 
                 case 'chat':
-                    broadcastToRoom(room, { type: 'chat', nickname: data.nickname, message: data.message });
+                    broadcastToRoom(clientRoom.get(ws), { type: 'chat', nickname: message.nickname, message: message.message });
                     break;
 
                 case 'player_damage': {
                     const attacker = gamePlayers[playerId];
-                    const target = gamePlayers[data.target_id];
+                    const target = gamePlayers[message.target_id];
                     if (!attacker || !target || attacker.team === target.team || target.is_dead) break;
-                    const damage = Math.min(Math.max(parseInt(data.damage) || 0, 0), 200);
+                    const damage = Math.min(Math.max(parseInt(message.damage) || 0, 0), 200);
                     target.hp = Math.max(0, (target.hp ?? PLAYER_MAX_HP) - damage);
-                    broadcastToRoom('game', { type: 'player_damage', target_id: data.target_id, damage: damage, new_hp: target.hp, attacker_id: playerId });
+                    broadcastToRoom('game', { type: 'player_damage', target_id: message.target_id, damage: damage, new_hp: target.hp, attacker_id: playerId });
                     if (target.hp <= 0) { target.is_dead = true; }
                     break;
                 }
 
                 case 'creep_damage': {
-                    const c = creeps[data.creep_id];
-                    if (c) {
-                        c.hp -= data.damage;
-                        broadcastToRoom('game', { type: 'creep_damage', id: data.creep_id, new_hp: c.hp });
-                        if (c.hp <= 0) { delete creeps[data.creep_id]; broadcastToRoom('game', { type: 'creep_destroy', id: data.creep_id }); }
+                    if (!gamePlayers[playerId]) break;
+                    const creepId = message.creep_id;
+                    if (creeps[creepId]) {
+                        creeps[creepId].hp -= message.damage;
+                        broadcastToRoom('game', { type: 'creep_damage', id: creepId, new_hp: creeps[creepId].hp });
+                        if (creeps[creepId].hp <= 0) { delete creeps[creepId]; broadcastToRoom('game', { type: 'creep_destroy', id: creepId }); }
                     }
                     break;
                 }
@@ -225,12 +213,12 @@ wss.on('connection', (ws) => {
                 case 'town_damage': {
                     if (!gamePlayers[playerId]) break;
                     const team = gamePlayers[playerId].team;
-                    if ((data.town_id === 1 && team === 1) || (data.town_id === 2 && team === 2)) break;
-                    const dmg = Math.min(Math.max(parseInt(data.damage) || 0, 0), 200);
-                    if (data.town_id === 1) town1_hp = Math.max(0, town1_hp - dmg);
+                    if ((message.town_id === 1 && team === 1) || (message.town_id === 2 && team === 2)) break;
+                    const dmg = Math.min(Math.max(parseInt(message.damage) || 0, 0), 200);
+                    if (message.town_id === 1) town1_hp = Math.max(0, town1_hp - dmg);
                     else town2_hp = Math.max(0, town2_hp - dmg);
-                    const new_hp = data.town_id === 1 ? town1_hp : town2_hp;
-                    broadcastToRoom('game', { type: 'town_damage', town_id: data.town_id, damage: dmg, new_hp: new_hp });
+                    const new_hp = message.town_id === 1 ? town1_hp : town2_hp;
+                    broadcastToRoom('game', { type: 'town_damage', town_id: message.town_id, damage: dmg, new_hp: new_hp });
                     if (town1_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 2 });
                     else if (town2_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 1 });
                     break;
@@ -239,11 +227,11 @@ wss.on('connection', (ws) => {
                 case 'barracks_damage': {
                     if (!gamePlayers[playerId]) break;
                     const team = gamePlayers[playerId].team;
-                    if ((data.barracks_id === 1 && team === 1) || (data.barracks_id === 2 && team === 2)) break;
-                    const dmg = Math.min(Math.max(parseInt(data.damage) || 0, 0), 200);
-                    console.log("Barracks " + data.barracks_id + " damaged by team " + team + " for " + dmg + " damage. Current HP: " + (data.barracks_id === 1 ? barracks1_hp : barracks2_hp));
+                    if ((message.barracks_id === 1 && team === 1) || (message.barracks_id === 2 && team === 2)) break;
+                    const dmg = Math.min(Math.max(parseInt(message.damage) || 0, 0), 200);
+                    console.log("Barracks " + message.barracks_id + " damaged by team " + team + " for " + dmg + " damage. Current HP: " + (message.barracks_id === 1 ? barracks1_hp : barracks2_hp));
                     
-                    if (data.barracks_id === 1) {
+                    if (message.barracks_id === 1) {
                         barracks1_hp = Math.max(0, barracks1_hp - dmg);
                         if (barracks1_hp <= 0 && !barracks1_destroyed) {
                             barracks1_destroyed = true;
@@ -258,8 +246,8 @@ wss.on('connection', (ws) => {
                             console.log("Barracks 2 destroyed!");
                         }
                     }
-                    const new_hp = data.barracks_id === 1 ? barracks1_hp : barracks2_hp;
-                    broadcastToRoom('game', { type: 'barracks_damage', barracks_id: data.barracks_id, damage: dmg, new_hp: new_hp });
+                    const new_hp = message.barracks_id === 1 ? barracks1_hp : barracks2_hp;
+                    broadcastToRoom('game', { type: 'barracks_damage', barracks_id: message.barracks_id, damage: dmg, new_hp: new_hp });
                     break;
                 }
 
@@ -276,13 +264,13 @@ wss.on('connection', (ws) => {
                     if (!gamePlayers[playerId]) return;
                     const others = {};
                     for (let id in gamePlayers) { if (id !== playerId) others[id] = gamePlayers[id]; }
-                    // Отправляем информацию о текущих крипах
+                    // Send information about current creeps
                     const currentCreeps = {};
                     for (let id in creeps) currentCreeps[id] = creeps[id];
                     ws.send(JSON.stringify({ type: 'init_game', players: others, my_team: gamePlayers[playerId].team, town1_hp, town2_hp, creeps: currentCreeps }));
                     break;
             }
-        } catch (e) { console.log("Ошибка:", e); }
+        } catch (e) { console.log("Error:", e); }
     });
 
     ws.on('close', () => {
@@ -298,4 +286,4 @@ wss.on('connection', (ws) => {
 });
 
 const PORT = process.env.PORT || 2567;
-server.listen(PORT, '0.0.0.0', () => { console.log(`Сервер запущен на ${PORT}`); });
+server.listen(PORT, '0.0.0.0', () => { console.log(`Server running on ${PORT}`); });
