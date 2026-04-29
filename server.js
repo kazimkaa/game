@@ -33,11 +33,14 @@ app.use(express.static('public')); // Добавляем статические 
 
 function broadcastToRoom(room, data) {
     const packet = JSON.stringify(data);
+    let sentCount = 0;
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === room) {
             client.send(packet);
+            sentCount++;
         }
     });
+    console.log("Broadcast to room '" + room + "' sent to " + sentCount + " clients. Data: " + data.type);
 }
 
 // Функция спавна крипа
@@ -161,11 +164,14 @@ wss.on('connection', (ws) => {
             switch (message.type) {
                 case 'join':
                     playerId = message.id;
+                    console.log("Player " + playerId + " (" + message.nickname + ") joined lobby");
                     clientRoom.set(ws, 'lobby');
                     lobbyPlayers[playerId] = { nickname: message.nickname || "Player", character: message.character || 1, x: message.x, y: message.y, flip: false };
                     const playersInLobby = {};
                     for (let id in lobbyPlayers) { if (id !== playerId) playersInLobby[id] = lobbyPlayers[id]; }
+                    console.log("Sending init to " + playerId + " with " + Object.keys(playersInLobby).length + " other players");
                     ws.send(JSON.stringify({ type: 'init', players: playersInLobby }));
+                    console.log("Broadcasting player_joined to lobby room. Total players: " + Object.keys(lobbyPlayers).length);
                     broadcastToRoom('lobby', { type: 'player_joined', id: playerId, ...lobbyPlayers[playerId] });
 
                     const playersCount = Object.keys(lobbyPlayers).length;
