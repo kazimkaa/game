@@ -42,7 +42,11 @@ function broadcastToRoom(room, data) {
 
 // Функция спавна крипа
 function spawnCreep(team) {
-    if ((team === 1 && barracks1_destroyed) || (team === 2 && barracks2_destroyed)) return; // Check if barracks is destroyed
+    if ((team === 1 && barracks1_destroyed) || (team === 2 && barracks2_destroyed)) {
+        console.log("Cannot spawn creep for team " + team + " - barracks destroyed!");
+        return; // Check if barracks is destroyed
+    }
+    console.log("Spawning creep for team " + team + " at positions: x=" + (team === 1 ? -830.0 : 1950.0) + ", y=" + (team === 1 ? 463.0 : 462.0));
     creepIdCounter++;
     const creepId = `creep_${creepIdCounter}`;
     creeps[creepId] = { 
@@ -229,6 +233,8 @@ wss.on('connection', (ws) => {
                     const team = gamePlayers[playerId].team;
                     if ((data.barracks_id === 1 && team === 1) || (data.barracks_id === 2 && team === 2)) break;
                     const dmg = Math.min(Math.max(parseInt(data.damage) || 0, 0), 200);
+                    console.log("Barracks " + data.barracks_id + " damaged by team " + team + " for " + dmg + " damage. Current HP: " + (data.barracks_id === 1 ? barracks1_hp : barracks2_hp));
+                    
                     if (data.barracks_id === 1) {
                         barracks1_hp = Math.max(0, barracks1_hp - dmg);
                         if (barracks1_hp <= 0 && !barracks1_destroyed) {
