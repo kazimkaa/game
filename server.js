@@ -112,6 +112,12 @@ function startGameForAll() {
     town1_hp = 1000;
     town2_hp = 1000;
     
+    // Reset barracks state
+    barracks1_hp = 500;
+    barracks2_hp = 500;
+    barracks1_destroyed = false;
+    barracks2_destroyed = false;
+    
     // Очищаем старых крипов
     for (let id in creeps) delete creeps[id];
     
@@ -259,7 +265,7 @@ wss.on('connection', (ws) => {
                     // Отправляем информацию о текущих крипах
                     const currentCreeps = {};
                     for (let id in creeps) currentCreeps[id] = creeps[id];
-                    ws.send(JSON.stringify({ type: 'init_game', players: others, my_team: gamePlayers[playerId].team, town1_hp, town2_hp, creeps: currentCreeps }));
+                    ws.send(JSON.stringify({ type: 'init_game', players: others, my_team: gamePlayers[playerId].team, town1_hp, town2_hp, barracks1_hp, barracks2_hp, creeps: currentCreeps }));
                     break;
             }
         } catch (e) { console.log("Ошибка:", e); }
