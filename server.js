@@ -22,12 +22,12 @@ const wss = new WebSocket.Server({ server });
 
 const lobbyPlayers = {};
 const gamePlayers = {};
-const clientRoom = new Map();      // ws -> room ('lobby' или 'game')
-const clientId = new Map();        // ws -> playerId
+const clientRoom = new Map();
+const clientId = new Map();
 const creeps = {};
 let creepIdCounter = 0;
 let creepSpawnInterval = null;
-let creepMoveInterval = null;      // FIXED: отдельный интервал для движения крипов
+let creepMoveInterval = null;
 
 let town1_hp = 1000;
 let town2_hp = 1000;
@@ -108,14 +108,11 @@ function stopGameIntervals() {
 }
 
 function startGameForAll() {
-    // Очищаем старые интервалы
     stopGameIntervals();
     
-    // Очищаем крипов
     for (let id in creeps) delete creeps[id];
     creepIdCounter = 0;
     
-    // Сброс состояния
     Object.keys(lobbyPlayers).forEach(id => {
         gamePlayers[id] = { ...lobbyPlayers[id], hp: PLAYER_MAX_HP, is_dead: false };
         delete lobbyPlayers[id];
@@ -129,7 +126,6 @@ function startGameForAll() {
     barracks1_destroyed = false;
     barracks2_destroyed = false;
     
-    // Запускаем спавн крипов
     spawnCreep(1);
     spawnCreep(2);
     creepSpawnInterval = setInterval(() => {
@@ -137,10 +133,8 @@ function startGameForAll() {
         spawnCreep(2);
     }, 30000);
     
-    // Запускаем движение крипов
     creepMoveInterval = setInterval(moveCreeps, 100);
     
-    // Переводим всех в игровую комнату
     wss.clients.forEach(client => {
         if (clientRoom.get(client) === 'lobby') {
             clientRoom.set(client, 'game');
@@ -156,7 +150,6 @@ wss.on('connection', (ws) => {
         try {
             const message = JSON.parse(data);
             
-            // Обработка join (создание игрока)
             if (message.type === 'join') {
                 playerId = message.id;
                 clientId.set(ws, playerId);
@@ -170,17 +163,13 @@ wss.on('connection', (ws) => {
                     flip: false 
                 };
                 
-                // Отправляем текущих игроков новому игроку
                 const playersInLobby = {};
                 for (let id in lobbyPlayers) {
                     if (id !== playerId) playersInLobby[id] = lobbyPlayers[id];
                 }
                 ws.send(JSON.stringify({ type: 'init', players: playersInLobby }));
-                
-                // Оповещаем всех о новом игроке
                 broadcastToRoom('lobby', { type: 'player_joined', id: playerId, ...lobbyPlayers[playerId] });
                 
-                // Запуск обратного отсчёта
                 const playersCount = Object.keys(lobbyPlayers).length;
                 if (playersCount >= 2 && !countdownActive) {
                     countdownActive = true;
@@ -203,7 +192,6 @@ wss.on('connection', (ws) => {
                 return;
             }
             
-            // Для всех остальных сообщений нужен playerId
             const pid = clientId.get(ws);
             if (!pid) return;
             
@@ -315,9 +303,7 @@ wss.on('connection', (ws) => {
                     break;
                 }
             }
-        } catch (e) {
-            // Ошибка парсинга — игнорируем
-        }
+        } catch (e) {}
     });
     
     ws.on('close', () => {
@@ -343,6 +329,4 @@ wss.on('connection', (ws) => {
 });
 
 const PORT = process.env.PORT || 2567;
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on ${PORT}`);
-});
+server.listen(PORT, '0.0.0.0');
