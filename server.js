@@ -3,6 +3,21 @@ const http = require('http');
 const WebSocket = require('ws');
 
 const app = express();
+
+// Add headers for WebSocket support
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, Content-Type, Accept, Authorization');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    
+    if (req.method === 'OPTIONS') {
+        res.sendStatus(200);
+    } else {
+        next();
+    }
+});
+
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
