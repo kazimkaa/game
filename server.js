@@ -70,7 +70,15 @@ function spawnCreep(team) {
         targetX: (team === 1 ? 1600 : 300),
         speed: 1
     };
-    broadcastToRoom('game', { type: 'creep_spawn', ...creeps[creepId] });
+    // Include barracks state in every creep_spawn message for guaranteed synchronization
+    broadcastToRoom('game', { 
+        type: 'creep_spawn', 
+        ...creeps[creepId],
+        barracks1_hp: barracks1_hp,
+        barracks2_hp: barracks2_hp,
+        barracks1_destroyed: barracks1_destroyed,
+        barracks2_destroyed: barracks2_destroyed
+    });
 }
 
 function moveCreeps() {
