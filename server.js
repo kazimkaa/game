@@ -298,6 +298,10 @@ wss.on('connection', (ws) => {
                         my_team: player.team,
                         town1_hp: town1_hp,
                         town2_hp: town2_hp,
+                        barracks1_hp: barracks1_hp,
+                        barracks2_hp: barracks2_hp,
+                        barracks1_destroyed: barracks1_destroyed,
+                        barracks2_destroyed: barracks2_destroyed,
                         creeps: currentCreeps
                     }));
                     break;
