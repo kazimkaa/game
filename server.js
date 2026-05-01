@@ -46,19 +46,20 @@ const PLAYER_MAX_HP = 100;
 app.get('/', (req, res) => res.send('Multiplayer Server Active'));
 app.use(express.static('public'));
 
-function broadcastToRoom(room, data, excludeClient = null) {
+function broadcastToRoom(room, data) {
     const packet = JSON.stringify(data);
     wss.clients.forEach(client => {
-        if (client !== excludeClient && client.readyState === WebSocket.OPEN && clientRoom.get(client) === room) {
+        if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === room) {
             client.send(packet);
         }
     });
 }
 
-// Принудительная синхронизация - отправляем ВСЕМ клиентам ТЕКУЩЕЕ состояние сервера
+// ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ КАЗАРМ - рассылаем ВСЕМ клиентам
 function forceBarracksSync() {
-    console.log('[SERVER] 🔄 FORCE SYNC to ALL: HP1=' + barracks1_hp + ' HP2=' + barracks2_hp + 
-                ' DES1=' + barracks1_destroyed + ' DES2=' + barracks2_destroyed);
+    console.log('[SERVER] ===== FORCE BARRACKS SYNC =====');
+    console.log('[SERVER] Barracks 1: HP=' + barracks1_hp + ', Destroyed=' + barracks1_destroyed);
+    console.log('[SERVER] Barracks 2: HP=' + barracks2_hp + ', Destroyed=' + barracks2_destroyed);
     
     const syncData = {
         type: 'barracks_sync_response',
@@ -67,18 +68,19 @@ function forceBarracksSync() {
         barracks1_destroyed: barracks1_destroyed,
         barracks2_destroyed: barracks2_destroyed
     };
-    const packet = JSON.stringify(syncData);
     
+    let sentCount = 0;
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === 'game') {
-            client.send(packet);
+            client.send(JSON.stringify(syncData));
+            sentCount++;
         }
     });
+    console.log('[SERVER] Sync sent to ' + sentCount + ' clients');
 }
 
 function spawnCreep(team) {
     if ((team === 1 && barracks1_destroyed) || (team === 2 && barracks2_destroyed)) {
-        console.log('[SERVER] Cannot spawn creep for team ' + team + ' - barracks destroyed');
         return;
     }
     creepIdCounter++;
@@ -94,11 +96,7 @@ function spawnCreep(team) {
     };
     broadcastToRoom('game', { 
         type: 'creep_spawn', 
-        ...creeps[creepId],
-        barracks1_hp: barracks1_hp,
-        barracks2_hp: barracks2_hp,
-        barracks1_destroyed: barracks1_destroyed,
-        barracks2_destroyed: barracks2_destroyed
+        ...creeps[creepId]
     });
 }
 
@@ -123,7 +121,6 @@ function assignTeams() {
     ids.forEach((id, i) => {
         gamePlayers[id].team = (i < Math.ceil(ids.length / 2)) ? 1 : 2;
     });
-    console.log('[SERVER] Teams assigned:', ids.map(id => id + ': team ' + gamePlayers[id].team));
 }
 
 function stopGameIntervals() {
@@ -138,7 +135,7 @@ function stopGameIntervals() {
 }
 
 function startGameForAll() {
-    console.log('[SERVER] Starting game for all clients...');
+    console.log('[SERVER] Starting game...');
     stopGameIntervals();
     
     for (let id in creeps) delete creeps[id];
@@ -166,26 +163,21 @@ function startGameForAll() {
     
     creepMoveInterval = setInterval(moveCreeps, 100);
     
-    let movedClients = 0;
     wss.clients.forEach(client => {
         if (clientRoom.get(client) === 'lobby') {
             clientRoom.set(client, 'game');
             client.send(JSON.stringify({ type: 'start_game' }));
-            movedClients++;
-            console.log('[SERVER] Moved client from lobby to game');
         }
     });
-    console.log('[SERVER] Game started! Moved ' + movedClients + ' clients');
     
-    // Отправляем начальное состояние всем
+    // Отправляем начальное состояние казарм через 1 секунду
     setTimeout(() => {
         forceBarracksSync();
-    }, 100);
+    }, 1000);
 }
 
 wss.on('connection', (ws) => {
     let playerId = null;
-    console.log('[SERVER] New client connected, total:', wss.clients.size);
     
     ws.on('message', data => {
         try {
@@ -195,7 +187,6 @@ wss.on('connection', (ws) => {
                 playerId = message.id;
                 clientId.set(ws, playerId);
                 clientRoom.set(ws, 'lobby');
-                console.log('[SERVER] Player ' + playerId + ' joined lobby');
                 
                 lobbyPlayers[playerId] = { 
                     nickname: message.nickname || "Player", 
@@ -250,11 +241,7 @@ wss.on('connection', (ws) => {
                             id: pid, 
                             x: message.x, 
                             y: message.y, 
-                            flip: message.flip,
-                            barracks1_hp: barracks1_hp,
-                            barracks2_hp: barracks2_hp,
-                            barracks1_destroyed: barracks1_destroyed,
-                            barracks2_destroyed: barracks2_destroyed
+                            flip: message.flip
                         });
                     }
                     break;
@@ -269,7 +256,7 @@ wss.on('connection', (ws) => {
                     if (!attacker || !target || attacker.team === target.team || target.is_dead) break;
                     const damage = Math.min(Math.max(parseInt(message.damage) || 0, 0), 200);
                     target.hp = Math.max(0, (target.hp ?? PLAYER_MAX_HP) - damage);
-                    broadcastToRoom('game', { type: 'player_damage', target_id: message.target_id, damage: damage, new_hp: target.hp, attacker_id: pid });
+                    broadcastToRoom('game', { type: 'player_damage', target_id: message.target_id, new_hp: target.hp });
                     if (target.hp <= 0) target.is_dead = true;
                     break;
                 }
@@ -295,36 +282,34 @@ wss.on('connection', (ws) => {
                     if (message.town_id === 1) town1_hp = Math.max(0, town1_hp - dmg);
                     else town2_hp = Math.max(0, town2_hp - dmg);
                     const new_hp = message.town_id === 1 ? town1_hp : town2_hp;
-                    broadcastToRoom('game', { type: 'town_damage', town_id: message.town_id, damage: dmg, new_hp: new_hp });
+                    broadcastToRoom('game', { type: 'town_damage', town_id: message.town_id, new_hp: new_hp });
                     if (town1_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 2 });
                     else if (town2_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 1 });
                     break;
                 }
                     
-                // ОСНОВНОЙ ОБРАБОТЧИК УРОНА ПО КАЗАРМАМ
+                // ГЛАВНЫЙ ОБРАБОТЧИК УРОНА ПО КАЗАРМАМ
                 case 'barracks_damage': {
-                    console.log('[SERVER] 🎯 BARRACKS DAMAGE from player ' + pid);
+                    console.log('[SERVER] 💥 BARACKS DAMAGE from player ' + pid);
                     const player = gamePlayers[pid];
                     if (!player) {
-                        console.log('[SERVER] ❌ Player not found');
+                        console.log('[SERVER] Player not found!');
                         break;
                     }
                     
-                    // Нельзя атаковать свою казарму
+                    // Проверка: нельзя атаковать свою казарму
                     if ((message.barracks_id === 1 && player.team === 1) || 
                         (message.barracks_id === 2 && player.team === 2)) {
-                        console.log('[SERVER] ❌ Player attacking own barracks');
+                        console.log('[SERVER] Player cannot attack own barracks!');
                         break;
                     }
                     
-                    const dmg = Math.min(Math.max(parseInt(message.damage) || 0, 0), 200);
-                    let changed = false;
+                    const damage = Math.min(Math.max(parseInt(message.damage) || 0, 0), 200);
                     
                     if (message.barracks_id === 1 && !barracks1_destroyed) {
                         const oldHp = barracks1_hp;
-                        barracks1_hp = Math.max(0, barracks1_hp - dmg);
-                        console.log('[SERVER] 🏰 BARRACKS 1: ' + oldHp + ' → ' + barracks1_hp);
-                        changed = true;
+                        barracks1_hp = Math.max(0, barracks1_hp - damage);
+                        console.log('[SERVER] Barracks 1: ' + oldHp + ' -> ' + barracks1_hp);
                         
                         if (barracks1_hp <= 0 && !barracks1_destroyed) {
                             barracks1_destroyed = true;
@@ -332,13 +317,17 @@ wss.on('connection', (ws) => {
                             console.log('[SERVER] 💀 BARRACKS 1 DESTROYED!');
                             broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 1 });
                         }
+                        
+                        // Отправляем событие об уроне
                         broadcastToRoom('game', { type: 'barracks_damage', barracks_id: 1, new_hp: barracks1_hp });
+                        
+                        // ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ ВСЕМ
+                        forceBarracksSync();
                         
                     } else if (message.barracks_id === 2 && !barracks2_destroyed) {
                         const oldHp = barracks2_hp;
-                        barracks2_hp = Math.max(0, barracks2_hp - dmg);
-                        console.log('[SERVER] 🏰 BARRACKS 2: ' + oldHp + ' → ' + barracks2_hp);
-                        changed = true;
+                        barracks2_hp = Math.max(0, barracks2_hp - damage);
+                        console.log('[SERVER] Barracks 2: ' + oldHp + ' -> ' + barracks2_hp);
                         
                         if (barracks2_hp <= 0 && !barracks2_destroyed) {
                             barracks2_destroyed = true;
@@ -346,35 +335,16 @@ wss.on('connection', (ws) => {
                             console.log('[SERVER] 💀 BARRACKS 2 DESTROYED!');
                             broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 2 });
                         }
+                        
                         broadcastToRoom('game', { type: 'barracks_damage', barracks_id: 2, new_hp: barracks2_hp });
-                    }
-                    
-                    if (changed) {
-                        // НЕМЕДЛЕННО рассылаем актуальное состояние ВСЕМ
                         forceBarracksSync();
                     }
                     break;
                 }
                 
-                // ЗАПРОС СИНХРОНИЗАЦИИ от клиента
+                // ЗАПРОС СИНХРОНИЗАЦИИ ОТ КЛИЕНТА
                 case 'request_barracks_sync': {
-                    console.log('[SERVER] 📞 Sync requested by player ' + pid);
-                    // Отправляем этому клиенту ТЕКУЩЕЕ состояние сервера
-                    ws.send(JSON.stringify({
-                        type: 'barracks_sync_response',
-                        barracks1_hp: barracks1_hp,
-                        barracks2_hp: barracks2_hp,
-                        barracks1_destroyed: barracks1_destroyed,
-                        barracks2_destroyed: barracks2_destroyed
-                    }));
-                    break;
-                }
-                
-                // Клиент отправил свое состояние (НЕ обновляем сервер, сервер - источник правды)
-                case 'barracks_state_sync': {
-                    console.log('[SERVER] 📥 Received state from client ' + pid + ' - IGNORING (server is source of truth)');
-                    // Сервер НЕ обновляется от клиента!
-                    // Вместо этого отправляем клиенту правильное состояние
+                    console.log('[SERVER] Sync requested by player ' + pid);
                     ws.send(JSON.stringify({
                         type: 'barracks_sync_response',
                         barracks1_hp: barracks1_hp,
@@ -391,7 +361,7 @@ wss.on('connection', (ws) => {
                     player.hp = PLAYER_MAX_HP;
                     player.is_dead = false;
                     const spawnX = player.team === 1 ? 300 : 1600;
-                    broadcastToRoom('game', { type: 'respawn', id: pid, x: spawnX, y: 450, hp: PLAYER_MAX_HP });
+                    broadcastToRoom('game', { type: 'respawn', id: pid, x: spawnX, y: 450 });
                     break;
                 }
                     
@@ -401,15 +371,12 @@ wss.on('connection', (ws) => {
                     
                     if (clientRoom.get(ws) === 'lobby') {
                         clientRoom.set(ws, 'game');
-                        console.log('[SERVER] Moved player to game room');
                     }
                     
                     const others = {};
                     for (let id in gamePlayers) {
                         if (id !== pid) others[id] = gamePlayers[id];
                     }
-                    const currentCreeps = {};
-                    for (let id in creeps) currentCreeps[id] = creeps[id];
                     
                     ws.send(JSON.stringify({
                         type: 'init_game',
@@ -420,12 +387,10 @@ wss.on('connection', (ws) => {
                         barracks1_hp: barracks1_hp,
                         barracks2_hp: barracks2_hp,
                         barracks1_destroyed: barracks1_destroyed,
-                        barracks2_destroyed: barracks2_destroyed,
-                        creeps: currentCreeps
+                        barracks2_destroyed: barracks2_destroyed
                     }));
-                    console.log('[SERVER] Sent init_game to player ' + pid);
                     
-                    // Отправляем актуальное состояние казарм
+                    // Отправляем синхронизацию казарм этому клиенту
                     setTimeout(() => {
                         ws.send(JSON.stringify({
                             type: 'barracks_sync_response',
@@ -434,7 +399,7 @@ wss.on('connection', (ws) => {
                             barracks1_destroyed: barracks1_destroyed,
                             barracks2_destroyed: barracks2_destroyed
                         }));
-                    }, 100);
+                    }, 500);
                     break;
                 }
             }
@@ -446,7 +411,6 @@ wss.on('connection', (ws) => {
     ws.on('close', () => {
         const pid = clientId.get(ws);
         if (pid) {
-            console.log('[SERVER] Player ' + pid + ' disconnected');
             delete lobbyPlayers[pid];
             delete gamePlayers[pid];
             broadcastToRoom('game', { type: 'player_left', id: pid });
@@ -468,5 +432,5 @@ wss.on('connection', (ws) => {
 
 const PORT = process.env.PORT || 2567;
 server.listen(PORT, '0.0.0.0', () => {
-    console.log('[SERVER] 🚀 Server started on port ' + PORT);
+    console.log('[SERVER] Started on port ' + PORT);
 });
