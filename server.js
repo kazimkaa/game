@@ -48,11 +48,14 @@ app.use(express.static('public'));
 
 function broadcastToRoom(room, data) {
     const packet = JSON.stringify(data);
+    let clientCount = 0;
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === room) {
             client.send(packet);
+            clientCount++;
         }
     });
+    console.log('[SERVER] Broadcast to room "' + room + '": ' + clientCount + ' clients, message: ' + packet);
 }
 
 function spawnCreep(team) {
@@ -276,16 +279,24 @@ wss.on('connection', (ws) => {
                     
                     if (message.barracks_id === 1) {
                         barracks1_hp = Math.max(0, barracks1_hp - dmg);
+                        console.log('[SERVER] Barracks 1 damage: ' + dmg + ', new HP: ' + barracks1_hp + ', destroyed: ' + barracks1_destroyed);
                         if (barracks1_hp <= 0 && !barracks1_destroyed) {
                             barracks1_destroyed = true;
-                            broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 1 });
+                            console.log('[SERVER] BARRACKS 1 DESTROYED - broadcasting to all clients');
+                            const destroyMsg = { type: 'barracks_destroyed', barracks_id: 1 };
+                            console.log('[SERVER] Sending message:', JSON.stringify(destroyMsg));
+                            broadcastToRoom('game', destroyMsg);
                         }
                         broadcastToRoom('game', { type: 'barracks_damage', barracks_id: 1, damage: dmg, new_hp: barracks1_hp });
                     } else {
                         barracks2_hp = Math.max(0, barracks2_hp - dmg);
+                        console.log('[SERVER] Barracks 2 damage: ' + dmg + ', new HP: ' + barracks2_hp + ', destroyed: ' + barracks2_destroyed);
                         if (barracks2_hp <= 0 && !barracks2_destroyed) {
                             barracks2_destroyed = true;
-                            broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 2 });
+                            console.log('[SERVER] BARRACKS 2 DESTROYED - broadcasting to all clients');
+                            const destroyMsg = { type: 'barracks_destroyed', barracks_id: 2 };
+                            console.log('[SERVER] Sending message:', JSON.stringify(destroyMsg));
+                            broadcastToRoom('game', destroyMsg);
                         }
                         broadcastToRoom('game', { type: 'barracks_damage', barracks_id: 2, damage: dmg, new_hp: barracks2_hp });
                     }
