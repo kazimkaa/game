@@ -48,21 +48,18 @@ app.use(express.static('public'));
 
 function broadcastToRoom(room, data) {
     const packet = JSON.stringify(data);
-    let clientCount = 0;
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === room) {
             client.send(packet);
-            clientCount++;
         }
     });
-    if (room === 'game') {
-        console.log('[SERVER] Broadcast to ' + clientCount + ' clients in game room:', data.type);
-    }
 }
 
-// ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ ВСЕМ КЛИЕНТАМ
+// ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ - отправляем ТОЛЬКО актуальные данные с сервера
 function forceBarracksSync() {
-    console.log('[SERVER] 🔄 FORCE SYNC: Broadcasting barracks state to ALL clients');
+    console.log('[SERVER] 🔄 FORCE SYNC: HP1=' + barracks1_hp + ' HP2=' + barracks2_hp + 
+                ' DES1=' + barracks1_destroyed + ' DES2=' + barracks2_destroyed);
+    
     const syncData = {
         type: 'barracks_sync_response',
         barracks1_hp: barracks1_hp,
@@ -71,33 +68,16 @@ function forceBarracksSync() {
         barracks2_destroyed: barracks2_destroyed
     };
     const packet = JSON.stringify(syncData);
-    let sentCount = 0;
+    
     wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
+        if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === 'game') {
             client.send(packet);
-            sentCount++;
         }
-    });
-    console.log('[SERVER] ✅ Force sync sent to ' + sentCount + ' clients');
-    console.log('[SERVER] 📊 State: HP1=' + barracks1_hp + ' HP2=' + barracks2_hp + 
-                ' DES1=' + barracks1_destroyed + ' DES2=' + barracks2_destroyed);
-}
-
-function broadcastBarracksState() {
-    console.log('[SERVER] Broadcasting barracks state: HP1=' + barracks1_hp + ', HP2=' + barracks2_hp + 
-                ', DES1=' + barracks1_destroyed + ', DES2=' + barracks2_destroyed);
-    broadcastToRoom('game', {
-        type: 'barracks_sync_response',
-        barracks1_hp: barracks1_hp,
-        barracks2_hp: barracks2_hp,
-        barracks1_destroyed: barracks1_destroyed,
-        barracks2_destroyed: barracks2_destroyed
     });
 }
 
 function spawnCreep(team) {
     if ((team === 1 && barracks1_destroyed) || (team === 2 && barracks2_destroyed)) {
-        console.log('[SERVER] Cannot spawn creep for team ' + team + ' - barracks destroyed');
         return;
     }
     creepIdCounter++;
@@ -111,7 +91,6 @@ function spawnCreep(team) {
         targetX: (team === 1 ? 1600 : 300),
         speed: 1
     };
-    // Include barracks state in every creep_spawn message for guaranteed synchronization
     broadcastToRoom('game', { 
         type: 'creep_spawn', 
         ...creeps[creepId],
@@ -143,7 +122,6 @@ function assignTeams() {
     ids.forEach((id, i) => {
         gamePlayers[id].team = (i < Math.ceil(ids.length / 2)) ? 1 : 2;
     });
-    console.log('[SERVER] Teams assigned:', ids.map(id => id + ': team ' + gamePlayers[id].team));
 }
 
 function stopGameIntervals() {
@@ -158,7 +136,7 @@ function stopGameIntervals() {
 }
 
 function startGameForAll() {
-    console.log('[SERVER] Starting game for all clients...');
+    console.log('[SERVER] Starting game...');
     stopGameIntervals();
     
     for (let id in creeps) delete creeps[id];
@@ -186,18 +164,14 @@ function startGameForAll() {
     
     creepMoveInterval = setInterval(moveCreeps, 100);
     
-    let movedClients = 0;
     wss.clients.forEach(client => {
         if (clientRoom.get(client) === 'lobby') {
             clientRoom.set(client, 'game');
             client.send(JSON.stringify({ type: 'start_game' }));
-            movedClients++;
-            console.log('[SERVER] Moved client from lobby to game room');
         }
     });
-    console.log('[SERVER] Game started! Moved ' + movedClients + ' clients to game room');
     
-    // Broadcast initial barracks state
+    // Отправляем начальное состояние
     setTimeout(() => {
         forceBarracksSync();
     }, 100);
@@ -205,7 +179,6 @@ function startGameForAll() {
 
 wss.on('connection', (ws) => {
     let playerId = null;
-    console.log('[SERVER] New client connected, total clients:', wss.clients.size);
     
     ws.on('message', data => {
         try {
@@ -215,7 +188,6 @@ wss.on('connection', (ws) => {
                 playerId = message.id;
                 clientId.set(ws, playerId);
                 clientRoom.set(ws, 'lobby');
-                console.log('[SERVER] Player ' + playerId + ' joined and assigned to lobby room');
                 
                 lobbyPlayers[playerId] = { 
                     nickname: message.nickname || "Player", 
@@ -265,7 +237,6 @@ wss.on('connection', (ws) => {
                         list[pid].x = message.x;
                         list[pid].y = message.y;
                         list[pid].flip = message.flip;
-                        // Include barracks state in every move message for guaranteed synchronization
                         broadcastToRoom(room, { 
                             type: 'player_moved', 
                             id: pid, 
@@ -323,68 +294,44 @@ wss.on('connection', (ws) => {
                 }
                     
                 case 'barracks_damage': {
-                    console.log('[SERVER] 🎯 BARRACKS DAMAGE from player ' + pid + ': ' + JSON.stringify(message));
                     const player = gamePlayers[pid];
-                    if (!player) {
-                        console.log('[SERVER] ❌ Player ' + pid + ' not found');
-                        break;
-                    }
-                    if ((message.barracks_id === 1 && player.team === 1) || (message.barracks_id === 2 && player.team === 2)) {
-                        console.log('[SERVER] ❌ Player ' + pid + ' attacking own barracks');
-                        break;
-                    }
+                    if (!player) break;
+                    if ((message.barracks_id === 1 && player.team === 1) || (message.barracks_id === 2 && player.team === 2)) break;
                     
                     const dmg = Math.min(Math.max(parseInt(message.damage) || 0, 0), 200);
                     
-                    if (message.barracks_id === 1) {
-                        const oldHp = barracks1_hp;
+                    if (message.barracks_id === 1 && !barracks1_destroyed) {
                         barracks1_hp = Math.max(0, barracks1_hp - dmg);
-                        console.log('[SERVER] 🏰 BARRACKS 1: ' + oldHp + ' → ' + barracks1_hp + ' (damage: ' + dmg + ')');
+                        console.log('[SERVER] BARRACKS 1: ' + barracks1_hp + ' HP');
                         
                         if (barracks1_hp <= 0 && !barracks1_destroyed) {
                             barracks1_destroyed = true;
-                            console.log('[SERVER] 💀 BARRACKS 1 DESTROYED!');
+                            barracks1_hp = 0;
+                            console.log('[SERVER] BARRACKS 1 DESTROYED!');
                             broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 1 });
                         }
-                        
                         broadcastToRoom('game', { type: 'barracks_damage', barracks_id: 1, new_hp: barracks1_hp });
-                    } else {
-                        const oldHp = barracks2_hp;
+                        // НЕМЕДЛЕННАЯ синхронизация с актуальным HP
+                        forceBarracksSync();
+                    } else if (message.barracks_id === 2 && !barracks2_destroyed) {
                         barracks2_hp = Math.max(0, barracks2_hp - dmg);
-                        console.log('[SERVER] 🏰 BARRACKS 2: ' + oldHp + ' → ' + barracks2_hp + ' (damage: ' + dmg + ')');
+                        console.log('[SERVER] BARRACKS 2: ' + barracks2_hp + ' HP');
                         
                         if (barracks2_hp <= 0 && !barracks2_destroyed) {
                             barracks2_destroyed = true;
-                            console.log('[SERVER] 💀 BARRACKS 2 DESTROYED!');
+                            barracks2_hp = 0;
+                            console.log('[SERVER] BARRACKS 2 DESTROYED!');
                             broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 2 });
                         }
-                        
                         broadcastToRoom('game', { type: 'barracks_damage', barracks_id: 2, new_hp: barracks2_hp });
-                    }
-                    
-                    // ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ - отправляем всем клиентам актуальное состояние
-                    forceBarracksSync();
-                    break;
-                }
-                
-                case 'barracks_destroyed_client': {
-                    console.log('[SERVER] 📢 Client reports barracks destroyed: ' + message.barracks_id);
-                    if (message.barracks_id === 1 && !barracks1_destroyed) {
-                        barracks1_destroyed = true;
-                        barracks1_hp = 0;
-                        broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 1 });
-                        forceBarracksSync();
-                    } else if (message.barracks_id === 2 && !barracks2_destroyed) {
-                        barracks2_destroyed = true;
-                        barracks2_hp = 0;
-                        broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 2 });
                         forceBarracksSync();
                     }
                     break;
                 }
                 
+                // ЗАПРОС СИНХРОНИЗАЦИИ - отправляем ТЕКУЩЕЕ состояние с сервера
                 case 'request_barracks_sync': {
-                    console.log('[SERVER] 📞 Barracks sync requested by player ' + pid);
+                    console.log('[SERVER] Sync requested by player, sending current state');
                     ws.send(JSON.stringify({
                         type: 'barracks_sync_response',
                         barracks1_hp: barracks1_hp,
@@ -395,39 +342,33 @@ wss.on('connection', (ws) => {
                     break;
                 }
                 
+                // ПОЛУЧЕНИЕ СОСТОЯНИЯ ОТ КЛИЕНТА - НЕ обновляем сервер, если казарма уже разрушена
                 case 'barracks_state_sync': {
-                    console.log('[SERVER] 📥 Received barracks state from player ' + pid);
-                    console.log('[SERVER] 📊 Received: HP1=' + message.barracks1_hp + ', HP2=' + message.barracks2_hp +
-                                ', DES1=' + message.barracks1_destroyed + ', DES2=' + message.barracks2_destroyed);
+                    console.log('[SERVER] Received state from client: HP1=' + message.barracks1_hp + ' HP2=' + message.barracks2_hp);
                     
-                    let needSync = false;
-                    
-                    // Обновляем состояние казарм на сервере, если клиент прислал более новое
-                    if (message.barracks1_hp !== undefined && message.barracks1_hp !== barracks1_hp) {
-                        const oldHp = barracks1_hp;
+                    // ВАЖНО: Обновляем сервер только если значение БОЛЬШЕ 0 и казарма не разрушена
+                    if (message.barracks1_hp !== undefined && message.barracks1_hp > 0 && message.barracks1_hp < barracks1_hp && !barracks1_destroyed) {
                         barracks1_hp = message.barracks1_hp;
-                        console.log('[SERVER] 📝 Updated barracks1 HP: ' + oldHp + ' → ' + barracks1_hp);
-                        needSync = true;
+                        console.log('[SERVER] Updated barracks1 HP to ' + barracks1_hp);
+                        forceBarracksSync();
                     }
-                    if (message.barracks2_hp !== undefined && message.barracks2_hp !== barracks2_hp) {
-                        const oldHp = barracks2_hp;
+                    if (message.barracks2_hp !== undefined && message.barracks2_hp > 0 && message.barracks2_hp < barracks2_hp && !barracks2_destroyed) {
                         barracks2_hp = message.barracks2_hp;
-                        console.log('[SERVER] 📝 Updated barracks2 HP: ' + oldHp + ' → ' + barracks2_hp);
-                        needSync = true;
-                    }
-                    if (message.barracks1_destroyed !== undefined && message.barracks1_destroyed !== barracks1_destroyed) {
-                        barracks1_destroyed = message.barracks1_destroyed;
-                        console.log('[SERVER] 📝 Updated barracks1 destroyed: ' + barracks1_destroyed);
-                        needSync = true;
-                    }
-                    if (message.barracks2_destroyed !== undefined && message.barracks2_destroyed !== barracks2_destroyed) {
-                        barracks2_destroyed = message.barracks2_destroyed;
-                        console.log('[SERVER] 📝 Updated barracks2 destroyed: ' + barracks2_destroyed);
-                        needSync = true;
+                        console.log('[SERVER] Updated barracks2 HP to ' + barracks2_hp);
+                        forceBarracksSync();
                     }
                     
-                    // Если были изменения - рассылаем всем
-                    if (needSync) {
+                    // Обновляем состояние разрушения только если оно изменилось на true
+                    if (message.barracks1_destroyed === true && !barracks1_destroyed) {
+                        barracks1_destroyed = true;
+                        barracks1_hp = 0;
+                        console.log('[SERVER] Barracks 1 destroyed via sync');
+                        forceBarracksSync();
+                    }
+                    if (message.barracks2_destroyed === true && !barracks2_destroyed) {
+                        barracks2_destroyed = true;
+                        barracks2_hp = 0;
+                        console.log('[SERVER] Barracks 2 destroyed via sync');
                         forceBarracksSync();
                     }
                     break;
@@ -444,20 +385,10 @@ wss.on('connection', (ws) => {
                 }
                     
                 case 'level_ready': {
-                    console.log('[SERVER] level_ready from player ' + pid);
                     const player = gamePlayers[pid];
-                    if (!player) {
-                        console.log('[SERVER] Player not found in gamePlayers, checking lobby...');
-                        if (lobbyPlayers[pid]) {
-                            gamePlayers[pid] = { ...lobbyPlayers[pid], hp: PLAYER_MAX_HP, is_dead: false };
-                            delete lobbyPlayers[pid];
-                            console.log('[SERVER] Moved player from lobby to game');
-                        }
-                    }
                     
                     if (clientRoom.get(ws) === 'lobby') {
                         clientRoom.set(ws, 'game');
-                        console.log('[SERVER] Forced client room transition from lobby to game');
                     }
                     
                     const others = {};
@@ -479,17 +410,11 @@ wss.on('connection', (ws) => {
                         barracks2_destroyed: barracks2_destroyed,
                         creeps: currentCreeps
                     }));
-                    console.log('[SERVER] Sent init_game to player ' + pid);
-                    
-                    // Отправляем принудительную синхронизацию после инициализации
-                    setTimeout(() => {
-                        forceBarracksSync();
-                    }, 50);
                     break;
                 }
             }
         } catch (e) {
-            console.log('[SERVER] Error parsing message:', e);
+            console.log('[SERVER] Error:', e);
         }
     });
     
@@ -517,4 +442,4 @@ wss.on('connection', (ws) => {
 
 const PORT = process.env.PORT || 2567;
 server.listen(PORT, '0.0.0.0');
-console.log('[SERVER] 🚀 Server started on port ' + PORT);
+console.log('[SERVER] Started on port ' + PORT);
