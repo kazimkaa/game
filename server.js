@@ -211,7 +211,18 @@ wss.on('connection', (ws) => {
                         list[pid].x = message.x;
                         list[pid].y = message.y;
                         list[pid].flip = message.flip;
-                        broadcastToRoom(room, { type: 'player_moved', id: pid, x: message.x, y: message.y, flip: message.flip });
+                        // Include barracks state in every move message for guaranteed synchronization
+                        broadcastToRoom(room, { 
+                            type: 'player_moved', 
+                            id: pid, 
+                            x: message.x, 
+                            y: message.y, 
+                            flip: message.flip,
+                            barracks1_hp: barracks1_hp,
+                            barracks2_hp: barracks2_hp,
+                            barracks1_destroyed: barracks1_destroyed,
+                            barracks2_destroyed: barracks2_destroyed
+                        });
                     }
                     break;
                     
