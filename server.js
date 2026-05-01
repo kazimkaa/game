@@ -55,7 +55,6 @@ function broadcastToRoom(room, data) {
             clientCount++;
         }
     });
-    console.log('[SERVER] Broadcast to room "' + room + '": ' + clientCount + ' clients, message: ' + packet);
 }
 
 function spawnCreep(team) {
@@ -279,22 +278,37 @@ wss.on('connection', (ws) => {
                 }
                     
                 case 'barracks_damage': {
+                    console.log('[SERVER] BARRACKS DAMAGE RECEIVED from player ' + pid + ': ' + JSON.stringify(message));
                     const player = gamePlayers[pid];
-                    if (!player) break;
-                    if ((message.barracks_id === 1 && player.team === 1) || (message.barracks_id === 2 && player.team === 2)) break;
+                    if (!player) {
+                        console.log('[SERVER] ERROR: Player ' + pid + ' not found for barracks damage');
+                        break;
+                    }
+                    if ((message.barracks_id === 1 && player.team === 1) || (message.barracks_id === 2 && player.team === 2)) {
+                        console.log('[SERVER] ERROR: Player ' + pid + ' attacking own barracks');
+                        break;
+                    }
                     const dmg = Math.min(Math.max(parseInt(message.damage) || 0, 0), 200);
                     
                     if (message.barracks_id === 1) {
+                        const oldHp = barracks1_hp;
                         barracks1_hp = Math.max(0, barracks1_hp - dmg);
+                        console.log('[SERVER] BARRACKS 1: old HP=' + oldHp + ', damage=' + dmg + ', new HP=' + barracks1_hp + ', destroyed=' + barracks1_destroyed);
+                        
                         if (barracks1_hp <= 0 && !barracks1_destroyed) {
                             barracks1_destroyed = true;
+                            console.log('[SERVER] BARRACKS 1 DESTROYED - broadcasting to clients');
                             broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 1 });
                         }
                         broadcastToRoom('game', { type: 'barracks_damage', barracks_id: 1, damage: dmg, new_hp: barracks1_hp });
                     } else {
+                        const oldHp = barracks2_hp;
                         barracks2_hp = Math.max(0, barracks2_hp - dmg);
+                        console.log('[SERVER] BARRACKS 2: old HP=' + oldHp + ', damage=' + dmg + ', new HP=' + barracks2_hp + ', destroyed=' + barracks2_destroyed);
+                        
                         if (barracks2_hp <= 0 && !barracks2_destroyed) {
                             barracks2_destroyed = true;
+                            console.log('[SERVER] BARRACKS 2 DESTROYED - broadcasting to clients');
                             broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 2 });
                         }
                         broadcastToRoom('game', { type: 'barracks_damage', barracks_id: 2, damage: dmg, new_hp: barracks2_hp });
