@@ -286,24 +286,16 @@ wss.on('connection', (ws) => {
                     
                     if (message.barracks_id === 1) {
                         barracks1_hp = Math.max(0, barracks1_hp - dmg);
-                        console.log('[SERVER] Barracks 1 damage: ' + dmg + ', new HP: ' + barracks1_hp + ', destroyed: ' + barracks1_destroyed);
                         if (barracks1_hp <= 0 && !barracks1_destroyed) {
                             barracks1_destroyed = true;
-                            console.log('[SERVER] BARRACKS 1 DESTROYED - broadcasting to all clients');
-                            const destroyMsg = { type: 'barracks_destroyed', barracks_id: 1 };
-                            console.log('[SERVER] Sending message:', JSON.stringify(destroyMsg));
-                            broadcastToRoom('game', destroyMsg);
+                            broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 1 });
                         }
                         broadcastToRoom('game', { type: 'barracks_damage', barracks_id: 1, damage: dmg, new_hp: barracks1_hp });
                     } else {
                         barracks2_hp = Math.max(0, barracks2_hp - dmg);
-                        console.log('[SERVER] Barracks 2 damage: ' + dmg + ', new HP: ' + barracks2_hp + ', destroyed: ' + barracks2_destroyed);
                         if (barracks2_hp <= 0 && !barracks2_destroyed) {
                             barracks2_destroyed = true;
-                            console.log('[SERVER] BARRACKS 2 DESTROYED - broadcasting to all clients');
-                            const destroyMsg = { type: 'barracks_destroyed', barracks_id: 2 };
-                            console.log('[SERVER] Sending message:', JSON.stringify(destroyMsg));
-                            broadcastToRoom('game', destroyMsg);
+                            broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 2 });
                         }
                         broadcastToRoom('game', { type: 'barracks_damage', barracks_id: 2, damage: dmg, new_hp: barracks2_hp });
                     }
@@ -321,8 +313,24 @@ wss.on('connection', (ws) => {
                 }
                     
                 case 'level_ready': {
+                    console.log('[SERVER] Received level_ready from player ' + pid);
                     const player = gamePlayers[pid];
-                    if (!player) return;
+                    if (!player) {
+                        console.log('[SERVER] Player not found in gamePlayers, checking lobby...');
+                        // Player might still be in lobby, move them to game
+                        if (lobbyPlayers[pid]) {
+                            gamePlayers[pid] = { ...lobbyPlayers[pid], hp: PLAYER_MAX_HP, is_dead: false };
+                            delete lobbyPlayers[pid];
+                            console.log('[SERVER] Moved player from lobby to game');
+                        }
+                    }
+                    
+                    // Force client to game room
+                    if (clientRoom.get(ws) === 'lobby') {
+                        clientRoom.set(ws, 'game');
+                        console.log('[SERVER] Forced client room transition from lobby to game');
+                    }
+                    
                     const others = {};
                     for (let id in gamePlayers) {
                         if (id !== pid) others[id] = gamePlayers[id];
@@ -332,7 +340,7 @@ wss.on('connection', (ws) => {
                     ws.send(JSON.stringify({
                         type: 'init_game',
                         players: others,
-                        my_team: player.team,
+                        my_team: player ? player.team : 1,
                         town1_hp: town1_hp,
                         town2_hp: town2_hp,
                         barracks1_hp: barracks1_hp,
@@ -341,6 +349,7 @@ wss.on('connection', (ws) => {
                         barracks2_destroyed: barracks2_destroyed,
                         creeps: currentCreeps
                     }));
+                    console.log('[SERVER] Sent init_game to player ' + pid);
                     break;
                 }
             }
