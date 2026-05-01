@@ -119,6 +119,7 @@ function stopGameIntervals() {
 }
 
 function startGameForAll() {
+    console.log('[SERVER] Starting game for all clients...');
     stopGameIntervals();
     
     for (let id in creeps) delete creeps[id];
@@ -146,16 +147,21 @@ function startGameForAll() {
     
     creepMoveInterval = setInterval(moveCreeps, 100);
     
+    let movedClients = 0;
     wss.clients.forEach(client => {
         if (clientRoom.get(client) === 'lobby') {
             clientRoom.set(client, 'game');
             client.send(JSON.stringify({ type: 'start_game' }));
+            movedClients++;
+            console.log('[SERVER] Moved client from lobby to game room');
         }
     });
+    console.log('[SERVER] Game started! Moved ' + movedClients + ' clients to game room');
 }
 
 wss.on('connection', (ws) => {
     let playerId = null;
+    console.log('[SERVER] New client connected, total clients:', wss.clients.size);
     
     ws.on('message', data => {
         try {
@@ -165,6 +171,7 @@ wss.on('connection', (ws) => {
                 playerId = message.id;
                 clientId.set(ws, playerId);
                 clientRoom.set(ws, 'lobby');
+                console.log('[SERVER] Player ' + playerId + ' joined and assigned to lobby room');
                 
                 lobbyPlayers[playerId] = { 
                     nickname: message.nickname || "Player", 
