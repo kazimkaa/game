@@ -34,14 +34,11 @@ app.use(express.static('public'));
 
 function broadcastToRoom(room, data) {
     const packet = JSON.stringify(data);
-    let sentCount = 0;
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === room) {
             client.send(packet);
-            sentCount++;
         }
     });
-    console.log("Broadcast to room '" + room + "' sent to " + sentCount + " clients. Type: " + data.type);
 }
 
 function spawnCreep(team) {
@@ -95,7 +92,6 @@ function assignTeams() {
     if (ids.length === 2) {
         gamePlayers[ids[0]].team = 1;
         gamePlayers[ids[1]].team = 2;
-        console.log("2 players: " + ids[0] + " -> team 1, " + ids[1] + " -> team 2");
         return;
     }
     for (let i = ids.length - 1; i > 0; i--) {
@@ -111,7 +107,11 @@ function startGameForAll() {
     console.log("=== GAME STARTING ===");
     
     Object.keys(lobbyPlayers).forEach(id => {
-        gamePlayers[id] = { ...lobbyPlayers[id], hp: PLAYER_MAX_HP, is_dead: false };
+        gamePlayers[id] = { 
+            ...lobbyPlayers[id], 
+            hp: PLAYER_MAX_HP, 
+            is_dead: false 
+        };
         delete lobbyPlayers[id];
     });
     
@@ -139,7 +139,7 @@ function startGameForAll() {
         }
     });
     
-    // ✅ Отправляем всем игрокам в игре полный список игроков
+    // Отправляем всем игрокам в игре полный список игроков
     wss.clients.forEach(client => {
         if (clientRoom.get(client) === 'game' && client.readyState === WebSocket.OPEN) {
             const pid = clientId.get(client);
@@ -157,6 +157,10 @@ function startGameForAll() {
                     my_team: gamePlayers[pid].team, 
                     town1_hp: town1_hp, 
                     town2_hp: town2_hp,
+                    barracks1_hp: barracks1_hp,
+                    barracks2_hp: barracks2_hp,
+                    barracks1_destroyed: barracks1_destroyed,
+                    barracks2_destroyed: barracks2_destroyed,
                     creeps: currentCreeps 
                 }));
             }
@@ -173,7 +177,6 @@ wss.on('connection', (ws) => {
     ws.on('message', data => {
         try {
             const message = JSON.parse(data);
-            console.log("Received: " + message.type);
             
             if (message.type === 'join') {
                 playerId = message.id;
@@ -186,8 +189,6 @@ wss.on('connection', (ws) => {
                     y: message.y || 300, 
                     flip: false 
                 };
-                
-                console.log("Player " + playerId + " joined lobby. Total: " + Object.keys(lobbyPlayers).length);
                 
                 const playersInLobby = {};
                 for (let id in lobbyPlayers) {
@@ -219,28 +220,43 @@ wss.on('connection', (ws) => {
             }
             
             const pid = clientId.get(ws);
-            if (!pid) {
-                console.log("No playerId found");
-                return;
-            }
+            if (!pid) return;
             
             switch (message.type) {
-                case 'move':
+                case 'move': {
                     const room = clientRoom.get(ws);
-                    const list = room === 'lobby' ? lobbyPlayers : gamePlayers;
-                    if (list[pid]) {
-                        list[pid].x = message.x;
-                        list[pid].y = message.y;
-                        list[pid].flip = message.flip;
-                        broadcastToRoom(room, { 
-                            type: 'player_moved', 
-                            id: pid, 
-                            x: message.x, 
-                            y: message.y, 
-                            flip: message.flip 
-                        });
+                    if (!room) break;
+                    
+                    if (room === 'lobby') {
+                        if (lobbyPlayers[pid]) {
+                            lobbyPlayers[pid].x = message.x;
+                            lobbyPlayers[pid].y = message.y;
+                            lobbyPlayers[pid].flip = message.flip;
+                            broadcastToRoom('lobby', { 
+                                type: 'player_moved', 
+                                id: pid, 
+                                x: message.x, 
+                                y: message.y, 
+                                flip: message.flip 
+                            });
+                        }
+                    } else if (room === 'game') {
+                        // ✅ СОХРАНЯЕМ координаты в gamePlayers
+                        if (gamePlayers[pid]) {
+                            gamePlayers[pid].x = message.x;
+                            gamePlayers[pid].y = message.y;
+                            gamePlayers[pid].flip = message.flip;
+                            broadcastToRoom('game', { 
+                                type: 'player_moved', 
+                                id: pid, 
+                                x: message.x, 
+                                y: message.y, 
+                                flip: message.flip 
+                            });
+                        }
                     }
                     break;
+                }
                     
                 case 'chat':
                     broadcastToRoom(clientRoom.get(ws), { 
@@ -317,12 +333,23 @@ wss.on('connection', (ws) => {
                     
                     if (!gamePlayers[pid]) {
                         if (lobbyPlayers[pid]) {
-                            gamePlayers[pid] = { ...lobbyPlayers[pid], hp: PLAYER_MAX_HP, is_dead: false };
+                            gamePlayers[pid] = { 
+                                ...lobbyPlayers[pid], 
+                                hp: PLAYER_MAX_HP, 
+                                is_dead: false 
+                            };
                             delete lobbyPlayers[pid];
                         } else {
                             console.log("Player " + pid + " not found");
                             break;
                         }
+                    }
+                    
+                    // ✅ Обновляем координаты из сообщения level_ready
+                    if (message.x !== undefined) {
+                        gamePlayers[pid].x = message.x;
+                        gamePlayers[pid].y = message.y;
+                        gamePlayers[pid].flip = message.flip || false;
                     }
                     
                     const others = {};
@@ -338,6 +365,10 @@ wss.on('connection', (ws) => {
                         my_team: gamePlayers[pid].team, 
                         town1_hp: town1_hp, 
                         town2_hp: town2_hp,
+                        barracks1_hp: barracks1_hp,
+                        barracks2_hp: barracks2_hp,
+                        barracks1_destroyed: barracks1_destroyed,
+                        barracks2_destroyed: barracks2_destroyed,
                         creeps: currentCreeps 
                     }));
                     break;
