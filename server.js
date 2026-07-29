@@ -3,35 +3,20 @@ const http = require('http');
 const WebSocket = require('ws');
 
 const app = express();
-
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, Content-Type, Accept, Authorization');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    
-    if (req.method === 'OPTIONS') {
-        res.sendStatus(200);
-    } else {
-        next();
-    }
-});
-
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const lobbyPlayers = {};
 const gamePlayers = {};
 const clientRoom = new Map();
-const clientId = new Map();
-const creeps = {};
-let creepIdCounter = 0;
-let creepSpawnInterval = null;
-let creepMoveInterval = null;
+const creeps = {}; // хранилище крипов
+let creepIdCounter = 0; // счетчик для уникальных ID крипов
+let creepSpawnInterval = null; // ИСПРАВЛЕНО: один интервал для всех игр
 
 let town1_hp = 1000;
 let town2_hp = 1000;
 
+// Barracks state
 let barracks1_hp = 500;
 let barracks2_hp = 500;
 let barracks1_destroyed = false;
@@ -44,45 +29,27 @@ let countdownInterval = null;
 const PLAYER_MAX_HP = 100;
 
 app.get('/', (req, res) => res.send('Multiplayer Server Active'));
-app.use(express.static('public'));
+app.use(express.static('public')); // Добавляем статические файлы
 
 function broadcastToRoom(room, data) {
     const packet = JSON.stringify(data);
+    let sentCount = 0;
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === room) {
             client.send(packet);
-        }
-    });
-}
-
-// ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ КАЗАРМ - рассылаем ВСЕМ клиентам
-function forceBarracksSync() {
-    console.log('[SERVER] ===== FORCE BARRACKS SYNC =====');
-    console.log('[SERVER] Barracks 1: HP=' + barracks1_hp + ', Destroyed=' + barracks1_destroyed);
-    console.log('[SERVER] Barracks 2: HP=' + barracks2_hp + ', Destroyed=' + barracks2_destroyed);
-    
-    const syncData = {
-        type: 'barracks_sync_response',
-        barracks1_hp: barracks1_hp,
-        barracks2_hp: barracks2_hp,
-        barracks1_destroyed: barracks1_destroyed,
-        barracks2_destroyed: barracks2_destroyed
-    };
-    
-    let sentCount = 0;
-    wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === 'game') {
-            client.send(JSON.stringify(syncData));
             sentCount++;
         }
     });
-    console.log('[SERVER] Sync sent to ' + sentCount + ' clients');
+    console.log("Broadcast to room '" + room + "' sent to " + sentCount + " clients. Data: " + data.type);
 }
 
+// Функция спавна крипа
 function spawnCreep(team) {
     if ((team === 1 && barracks1_destroyed) || (team === 2 && barracks2_destroyed)) {
-        return;
+        console.log("Cannot spawn creep for team " + team + " - barracks destroyed!");
+        return; // Check if barracks is destroyed
     }
+    console.log("Spawning creep for team " + team + " at positions: x=" + (team === 1 ? -830.0 : 1950.0) + ", y=" + (team === 1 ? 463.0 : 462.0));
     creepIdCounter++;
     const creepId = `creep_${creepIdCounter}`;
     creeps[creepId] = { 
@@ -90,30 +57,59 @@ function spawnCreep(team) {
         team: team, 
         x: (team === 1 ? -830.0 : 1950.0), 
         y: (team === 1 ? 463.0 : 462.0), 
-        hp: 30,
-        targetX: (team === 1 ? 1600 : 300),
-        speed: 1
+        hp: 30, // Increased creep health
+        targetX: (team === 1 ? 1600 : 300), // Target - enemy base
+        speed: 1 // Movement speed
     };
-    broadcastToRoom('game', { 
-        type: 'creep_spawn', 
-        ...creeps[creepId]
-    });
+    broadcastToRoom('game', { type: 'creep_spawn', ...creeps[creepId] });
 }
 
+// НОВОЕ: Функция движения крипов
 function moveCreeps() {
     for (let creepId in creeps) {
         const creep = creeps[creepId];
-        if (creep.x < creep.targetX) {
-            creep.x += creep.speed;
-        } else if (creep.x > creep.targetX) {
-            creep.x -= creep.speed;
+        
+        // Движение к цели
+        const dx = creep.targetX - creep.x;
+        if (Math.abs(dx) > creep.speed) {
+            creep.x += (dx > 0 ? creep.speed : -creep.speed);
+            broadcastToRoom('game', { type: 'creep_move', id: creepId, x: creep.x, y: creep.y });
+        } else {
+            // Крип достиг цели - наносит урон городу
+            const targetTown = creep.team === 1 ? 2 : 1;
+            const damage = 10;
+            
+            if (targetTown === 1) {
+                town1_hp = Math.max(0, town1_hp - damage);
+                broadcastToRoom('game', { type: 'town_damage', town_id: 1, damage: damage, new_hp: town1_hp });
+            } else {
+                town2_hp = Math.max(0, town2_hp - damage);
+                broadcastToRoom('game', { type: 'town_damage', town_id: 2, damage: damage, new_hp: town2_hp });
+            }
+            
+            // Удаляем крип после атаки
+            delete creeps[creepId];
+            broadcastToRoom('game', { type: 'creep_destroy', id: creepId });
+            
+            // Проверка победы
+            if (town1_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 2 });
+            else if (town2_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 1 });
         }
-        broadcastToRoom('game', { type: 'creep_move', id: creepId, x: creep.x, y: creep.y });
     }
 }
 
 function assignTeams() {
     const ids = Object.keys(gamePlayers);
+    
+    // Если 2 игрока - гарантированно разные команды
+    if (ids.length === 2) {
+        gamePlayers[ids[0]].team = 1;
+        gamePlayers[ids[1]].team = 2;
+        console.log("2 игрока: " + ids[0] + " -> команда 1, " + ids[1] + " -> команда 2");
+        return;
+    }
+    
+    // Для большего количества игроков - случайное распределение
     for (let i = ids.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [ids[i], ids[j]] = [ids[j], ids[i]];
@@ -123,314 +119,173 @@ function assignTeams() {
     });
 }
 
-function stopGameIntervals() {
-    if (creepSpawnInterval) {
-        clearInterval(creepSpawnInterval);
-        creepSpawnInterval = null;
-    }
-    if (creepMoveInterval) {
-        clearInterval(creepMoveInterval);
-        creepMoveInterval = null;
-    }
-}
-
 function startGameForAll() {
-    console.log('[SERVER] Starting game...');
-    stopGameIntervals();
-    
-    for (let id in creeps) delete creeps[id];
-    creepIdCounter = 0;
-    
+    console.log("Игра начинается!");
     Object.keys(lobbyPlayers).forEach(id => {
-        gamePlayers[id] = { ...lobbyPlayers[id], hp: PLAYER_MAX_HP, is_dead: false };
+        gamePlayers[id] = { ...lobbyPlayers[id], hp: PLAYER_MAX_HP };
         delete lobbyPlayers[id];
     });
-    
     assignTeams();
     town1_hp = 1000;
     town2_hp = 1000;
+    
+    // Reset barracks state
     barracks1_hp = 500;
     barracks2_hp = 500;
     barracks1_destroyed = false;
     barracks2_destroyed = false;
     
-    spawnCreep(1);
-    spawnCreep(2);
-    creepSpawnInterval = setInterval(() => {
-        spawnCreep(1);
-        spawnCreep(2);
+    // Очищаем старых крипов
+    for (let id in creeps) delete creeps[id];
+    
+    // ИСПРАВЛЕНО: Создаем только один интервал для всей игры
+    if (creepSpawnInterval) clearInterval(creepSpawnInterval);
+    
+    // Спавним первых крипов
+    spawnCreep(1); spawnCreep(2);
+    
+    // Запускаем спавн крипов каждые 30 секунд
+    creepSpawnInterval = setInterval(() => { 
+        spawnCreep(1); spawnCreep(2); 
     }, 30000);
     
-    creepMoveInterval = setInterval(moveCreeps, 100);
-    
+    // Запускаем движение крипов каждые 100мс
+    if (global.creepMoveInterval) clearInterval(global.creepMoveInterval);
+    global.creepMoveInterval = setInterval(moveCreeps, 100);
+
     wss.clients.forEach(client => {
         if (clientRoom.get(client) === 'lobby') {
             clientRoom.set(client, 'game');
             client.send(JSON.stringify({ type: 'start_game' }));
         }
     });
-    
-    // Отправляем начальное состояние казарм через 1 секунду
-    setTimeout(() => {
-        forceBarracksSync();
-    }, 1000);
 }
 
 wss.on('connection', (ws) => {
+    console.log("New WebSocket connection established. Total clients: " + wss.clients.size);
     let playerId = null;
-    
+
     ws.on('message', data => {
         try {
             const message = JSON.parse(data);
+            console.log("Received message: " + message.type + " from client");
             
+            // Handle join message first (before checking playerId)
             if (message.type === 'join') {
                 playerId = message.id;
-                clientId.set(ws, playerId);
+                console.log("Player " + playerId + " (" + message.nickname + ") joined lobby");
                 clientRoom.set(ws, 'lobby');
-                
-                lobbyPlayers[playerId] = { 
-                    nickname: message.nickname || "Player", 
-                    character: message.character || 1, 
-                    x: message.x, 
-                    y: message.y, 
-                    flip: false 
-                };
-                
+                lobbyPlayers[playerId] = { nickname: message.nickname || "Player", character: message.character || 1, x: message.x, y: message.y, flip: false };
                 const playersInLobby = {};
-                for (let id in lobbyPlayers) {
-                    if (id !== playerId) playersInLobby[id] = lobbyPlayers[id];
-                }
+                for (let id in lobbyPlayers) { if (id !== playerId) playersInLobby[id] = lobbyPlayers[id]; }
+                console.log("Sending init to " + playerId + " with " + Object.keys(playersInLobby).length + " other players");
                 ws.send(JSON.stringify({ type: 'init', players: playersInLobby }));
+                console.log("Broadcasting player_joined to lobby room. Total players: " + Object.keys(lobbyPlayers).length);
                 broadcastToRoom('lobby', { type: 'player_joined', id: playerId, ...lobbyPlayers[playerId] });
-                
-                const playersCount = Object.keys(lobbyPlayers).length;
-                if (playersCount >= 2 && !countdownActive) {
-                    countdownActive = true;
-                    countdownValue = 15;
-                    broadcastToRoom('lobby', { type: 'countdown_start', time: countdownValue });
-                    
-                    if (countdownInterval) clearInterval(countdownInterval);
-                    countdownInterval = setInterval(() => {
-                        countdownValue--;
-                        if (countdownValue <= 0) {
-                            clearInterval(countdownInterval);
-                            countdownInterval = null;
-                            countdownActive = false;
-                            startGameForAll();
-                        } else {
-                            broadcastToRoom('lobby', { type: 'countdown_update', time: countdownValue });
-                        }
-                    }, 1000);
-                }
                 return;
             }
             
-            const pid = clientId.get(ws);
-            if (!pid) return;
+            const playerId = clientRoom.get(ws);
+            if (!playerId) {
+                console.log("No playerId found for this client, message type: " + message.type);
+                return;
+            }
             
             switch (message.type) {
                 case 'move':
-                    const room = clientRoom.get(ws);
-                    const list = room === 'lobby' ? lobbyPlayers : gamePlayers;
-                    if (list[pid]) {
-                        list[pid].x = message.x;
-                        list[pid].y = message.y;
-                        list[pid].flip = message.flip;
-                        broadcastToRoom(room, { 
-                            type: 'player_moved', 
-                            id: pid, 
-                            x: message.x, 
-                            y: message.y, 
-                            flip: message.flip
-                        });
+                    const list = clientRoom.get(ws) === 'lobby' ? lobbyPlayers : gamePlayers;
+                    if (list[playerId]) {
+                        list[playerId].x = data.x; list[playerId].y = data.y; list[playerId].flip = data.flip;
+                        const movePacket = JSON.stringify({ type: 'player_moved', id: playerId, x: data.x, y: data.y, flip: data.flip });
+                        wss.clients.forEach(c => { if (c !== ws && c.readyState === WebSocket.OPEN && clientRoom.get(c) === clientRoom.get(ws)) c.send(movePacket); });
                     }
                     break;
-                    
-                case 'chat':
-                    broadcastToRoom(clientRoom.get(ws), { type: 'chat', nickname: message.nickname, message: message.message });
-                    break;
-                    
-                case 'player_damage': {
-                    const attacker = gamePlayers[pid];
-                    const target = gamePlayers[message.target_id];
-                    if (!attacker || !target || attacker.team === target.team || target.is_dead) break;
-                    const damage = Math.min(Math.max(parseInt(message.damage) || 0, 0), 200);
-                    target.hp = Math.max(0, (target.hp ?? PLAYER_MAX_HP) - damage);
-                    broadcastToRoom('game', { type: 'player_damage', target_id: message.target_id, new_hp: target.hp });
-                    if (target.hp <= 0) target.is_dead = true;
-                    break;
-                }
-                    
+
                 case 'creep_damage': {
-                    const creep = creeps[message.creep_id];
-                    if (creep) {
-                        creep.hp -= message.damage;
-                        broadcastToRoom('game', { type: 'creep_damage', id: message.creep_id, new_hp: creep.hp });
-                        if (creep.hp <= 0) {
-                            delete creeps[message.creep_id];
-                            broadcastToRoom('game', { type: 'creep_destroy', id: message.creep_id });
-                        }
+                    if (!gamePlayers[playerId]) break;
+                    const creepId = data.creep_id;
+                    if (creeps[creepId]) {
+                        creeps[creepId].hp -= data.damage;
+                        broadcastToRoom('game', { type: 'creep_damage', id: creepId, new_hp: creeps[creepId].hp });
+                        if (creeps[creepId].hp <= 0) { delete creeps[creepId]; broadcastToRoom('game', { type: 'creep_destroy', id: creepId }); }
                     }
                     break;
                 }
-                    
+
                 case 'town_damage': {
-                    const player = gamePlayers[pid];
-                    if (!player) break;
-                    if ((message.town_id === 1 && player.team === 1) || (message.town_id === 2 && player.team === 2)) break;
-                    const dmg = Math.min(Math.max(parseInt(message.damage) || 0, 0), 200);
-                    if (message.town_id === 1) town1_hp = Math.max(0, town1_hp - dmg);
+                    if (!gamePlayers[playerId]) break;
+                    const team = gamePlayers[playerId].team;
+                    if ((data.town_id === 1 && team === 1) || (data.town_id === 2 && team === 2)) break;
+                    const dmg = Math.min(Math.max(parseInt(data.damage) || 0, 0), 200);
+                    if (data.town_id === 1) town1_hp = Math.max(0, town1_hp - dmg);
                     else town2_hp = Math.max(0, town2_hp - dmg);
-                    const new_hp = message.town_id === 1 ? town1_hp : town2_hp;
-                    broadcastToRoom('game', { type: 'town_damage', town_id: message.town_id, new_hp: new_hp });
+                    const new_hp = data.town_id === 1 ? town1_hp : town2_hp;
+                    broadcastToRoom('game', { type: 'town_damage', town_id: data.town_id, damage: dmg, new_hp: new_hp });
                     if (town1_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 2 });
                     else if (town2_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 1 });
                     break;
                 }
-                    
-                // ГЛАВНЫЙ ОБРАБОТЧИК УРОНА ПО КАЗАРМАМ
+
                 case 'barracks_damage': {
-                    console.log('[SERVER] 💥 BARACKS DAMAGE from player ' + pid);
-                    const player = gamePlayers[pid];
-                    if (!player) {
-                        console.log('[SERVER] Player not found!');
-                        break;
-                    }
+                    if (!gamePlayers[playerId]) break;
+                    const team = gamePlayers[playerId].team;
+                    if ((data.barracks_id === 1 && team === 1) || (data.barracks_id === 2 && team === 2)) break;
+                    const dmg = Math.min(Math.max(parseInt(data.damage) || 0, 0), 200);
+                    console.log("Barracks " + data.barracks_id + " damaged by team " + team + " for " + dmg + " damage. Current HP: " + (data.barracks_id === 1 ? barracks1_hp : barracks2_hp));
                     
-                    // Проверка: нельзя атаковать свою казарму
-                    if ((message.barracks_id === 1 && player.team === 1) || 
-                        (message.barracks_id === 2 && player.team === 2)) {
-                        console.log('[SERVER] Player cannot attack own barracks!');
-                        break;
-                    }
-                    
-                    const damage = Math.min(Math.max(parseInt(message.damage) || 0, 0), 200);
-                    
-                    if (message.barracks_id === 1 && !barracks1_destroyed) {
-                        const oldHp = barracks1_hp;
-                        barracks1_hp = Math.max(0, barracks1_hp - damage);
-                        console.log('[SERVER] Barracks 1: ' + oldHp + ' -> ' + barracks1_hp);
-                        
+                    if (data.barracks_id === 1) {
+                        barracks1_hp = Math.max(0, barracks1_hp - dmg);
                         if (barracks1_hp <= 0 && !barracks1_destroyed) {
                             barracks1_destroyed = true;
-                            barracks1_hp = 0;
-                            console.log('[SERVER] 💀 BARRACKS 1 DESTROYED!');
                             broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 1 });
+                            console.log("Barracks 1 destroyed!");
                         }
-                        
-                        // Отправляем событие об уроне
-                        broadcastToRoom('game', { type: 'barracks_damage', barracks_id: 1, new_hp: barracks1_hp });
-                        
-                        // ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ ВСЕМ
-                        forceBarracksSync();
-                        
-                    } else if (message.barracks_id === 2 && !barracks2_destroyed) {
-                        const oldHp = barracks2_hp;
-                        barracks2_hp = Math.max(0, barracks2_hp - damage);
-                        console.log('[SERVER] Barracks 2: ' + oldHp + ' -> ' + barracks2_hp);
-                        
+                    } else {
+                        barracks2_hp = Math.max(0, barracks2_hp - dmg);
                         if (barracks2_hp <= 0 && !barracks2_destroyed) {
                             barracks2_destroyed = true;
-                            barracks2_hp = 0;
-                            console.log('[SERVER] 💀 BARRACKS 2 DESTROYED!');
                             broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 2 });
+                            console.log("Barracks 2 destroyed!");
                         }
-                        
-                        broadcastToRoom('game', { type: 'barracks_damage', barracks_id: 2, new_hp: barracks2_hp });
-                        forceBarracksSync();
                     }
+                    const new_hp = data.barracks_id === 1 ? barracks1_hp : barracks2_hp;
+                    broadcastToRoom('game', { type: 'barracks_damage', barracks_id: data.barracks_id, damage: dmg, new_hp: new_hp });
                     break;
                 }
-                
-                // ЗАПРОС СИНХРОНИЗАЦИИ ОТ КЛИЕНТА
-                case 'request_barracks_sync': {
-                    console.log('[SERVER] Sync requested by player ' + pid);
-                    ws.send(JSON.stringify({
-                        type: 'barracks_sync_response',
-                        barracks1_hp: barracks1_hp,
-                        barracks2_hp: barracks2_hp,
-                        barracks1_destroyed: barracks1_destroyed,
-                        barracks2_destroyed: barracks2_destroyed
-                    }));
-                    break;
-                }
-                    
+
                 case 'respawn': {
-                    const player = gamePlayers[pid];
-                    if (!player) break;
-                    player.hp = PLAYER_MAX_HP;
-                    player.is_dead = false;
-                    const spawnX = player.team === 1 ? 300 : 1600;
-                    broadcastToRoom('game', { type: 'respawn', id: pid, x: spawnX, y: 450 });
+                    if (!gamePlayers[playerId]) break;
+                    gamePlayers[playerId].hp = PLAYER_MAX_HP; gamePlayers[playerId].is_dead = false;
+                    const team = gamePlayers[playerId].team;
+                    const spawnX = team === 1 ? 300 : 1600;
+                    broadcastToRoom('game', { type: 'respawn', id: playerId, x: spawnX, y: 450, hp: PLAYER_MAX_HP });
                     break;
                 }
-                    
-                case 'level_ready': {
-                    console.log('[SERVER] level_ready from player ' + pid);
-                    const player = gamePlayers[pid];
-                    
-                    if (clientRoom.get(ws) === 'lobby') {
-                        clientRoom.set(ws, 'game');
-                    }
-                    
+
+                case 'level_ready':
+                    if (!gamePlayers[playerId]) return;
                     const others = {};
-                    for (let id in gamePlayers) {
-                        if (id !== pid) others[id] = gamePlayers[id];
-                    }
-                    
-                    ws.send(JSON.stringify({
-                        type: 'init_game',
-                        players: others,
-                        my_team: player ? player.team : 1,
-                        town1_hp: town1_hp,
-                        town2_hp: town2_hp,
-                        barracks1_hp: barracks1_hp,
-                        barracks2_hp: barracks2_hp,
-                        barracks1_destroyed: barracks1_destroyed,
-                        barracks2_destroyed: barracks2_destroyed
-                    }));
-                    
-                    // Отправляем синхронизацию казарм этому клиенту
-                    setTimeout(() => {
-                        ws.send(JSON.stringify({
-                            type: 'barracks_sync_response',
-                            barracks1_hp: barracks1_hp,
-                            barracks2_hp: barracks2_hp,
-                            barracks1_destroyed: barracks1_destroyed,
-                            barracks2_destroyed: barracks2_destroyed
-                        }));
-                    }, 500);
+                    for (let id in gamePlayers) { if (id !== playerId) others[id] = gamePlayers[id]; }
+                    // Send information about current creeps
+                    const currentCreeps = {};
+                    for (let id in creeps) currentCreeps[id] = creeps[id];
+                    ws.send(JSON.stringify({ type: 'init_game', players: others, my_team: gamePlayers[playerId].team, town1_hp, town2_hp, creeps: currentCreeps }));
                     break;
-                }
             }
-        } catch (e) {
-            console.log('[SERVER] Error:', e);
-        }
+        } catch (e) { console.log("Error:", e); }
     });
-    
+
     ws.on('close', () => {
-        const pid = clientId.get(ws);
-        if (pid) {
-            delete lobbyPlayers[pid];
-            delete gamePlayers[pid];
-            broadcastToRoom('game', { type: 'player_left', id: pid });
-            broadcastToRoom('lobby', { type: 'player_left', id: pid });
-            
-            if (Object.keys(lobbyPlayers).length < 2 && countdownActive) {
-                if (countdownInterval) {
-                    clearInterval(countdownInterval);
-                    countdownInterval = null;
-                }
-                countdownActive = false;
+        if (playerId) {
+            delete lobbyPlayers[playerId]; delete gamePlayers[playerId];
+            broadcastToRoom('game', { type: 'player_left', id: playerId });
+            if (Object.keys(lobbyPlayers).length < 2 && countdownInterval) {
+                clearInterval(countdownInterval); countdownInterval = null; countdownActive = false;
                 broadcastToRoom('lobby', { type: 'countdown_cancel' });
             }
         }
-        clientId.delete(ws);
-        clientRoom.delete(ws);
     });
 });
 
 const PORT = process.env.PORT || 2567;
-server.listen(PORT, '0.0.0.0', () => {
-    console.log('[SERVER] Started on port ' + PORT);
-});
+server.listen(PORT, '0.0.0.0', () => { console.log(`Server running on ${PORT}`); });
