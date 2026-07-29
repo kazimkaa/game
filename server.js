@@ -9,7 +9,7 @@ const { WebSocketServer } = require("ws");
 const PORT = process.env.PORT || 3000;
 
 const MIN_PLAYERS_TO_START = 2;      // сколько игроков нужно, чтобы начать отсчёт
-const COUNTDOWN_SECONDS = 15;
+const COUNTDOWN_SECONDS = 15;        // время таймера в лобби перед стартом
 
 const TOWN_MAX_HP = 1000;
 const BARRACKS_MAX_HP = 500;
@@ -24,7 +24,7 @@ const BARRACKS1_X = 500;
 const BARRACKS2_X = 1400;
 
 const CREEP_MAX_HP = 80;
-const CREEP_SPEED = 40;              // юниты в секунду
+const CREEP_SPEED = 40;             // юниты в секунду
 const CREEP_SPAWN_INTERVAL_MS = 15000;
 const CREEP_DAMAGE = 10;             // урон крипа по строению за тик
 const CREEP_HIT_RANGE = 40;
@@ -209,6 +209,11 @@ function handleJoin(ws, data) {
 		},
 		ws
 	);
+
+	// Если идёт отсчёт, передаём текущее время подключившемуся игроку
+	if (matchState === "countdown") {
+		send(ws, { type: "countdown_start", time: countdownValue });
+	}
 
 	maybeStartCountdown();
 }
