@@ -9,7 +9,7 @@ const { WebSocketServer } = require("ws");
 const PORT = process.env.PORT || 3000;
 
 const MIN_PLAYERS_TO_START = 2;      // сколько игроков нужно, чтобы начать отсчёт
-const COUNTDOWN_SECONDS = 5;
+const COUNTDOWN_SECONDS = 15;
 
 const TOWN_MAX_HP = 1000;
 const BARRACKS_MAX_HP = 500;
