@@ -1,254 +1,358 @@
-extends Node
+const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
 
-const SERVER_URL = "wss://game-2-slja.onrender.com/"
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 
-var socket := WebSocketPeer.new()
-var connected := false
-var my_session_id := ""
-var last_state := -1
-var join_sent := false
+const lobbyPlayers = {};
+const gamePlayers = {};
+const clientRoom = new Map();
+const clientId = new Map(); // ДОБАВЛЯЕМ - для отслеживания ID игроков
+const creeps = {};
+let creepIdCounter = 0;
+let creepSpawnInterval = null;
 
-var reconnect_timer := 0.0
-const RECONNECT_DELAY := 5.0
-var is_reconnecting := false
+let town1_hp = 1000;
+let town2_hp = 1000;
 
-# --- СИГНАЛЫ ---
-signal connection_changed(status, message)
-signal init_players(players_data)
-signal init_game_players(players_data, my_team, town1_hp, town2_hp, creeps_data)
-signal player_joined(id, x, y, flip, nickname, character)
-signal player_moved(id, x, y, flip)
-signal player_left(id)
-signal system_message_received(message)
-signal chat_message_received(sender_name, message)
-signal countdown_start(time)
-signal countdown_update(time)
-signal countdown_cancel()
-signal start_game
-signal town_damage(town_id, damage, new_hp)
-signal player_damage_received(target_id, new_hp)
-signal player_respawned(id, x, y, hp)
-signal game_over(winner)
-signal game_timer_update(time_left)
-signal room_reset
+// Barracks state
+let barracks1_hp = 500;
+let barracks2_hp = 500;
+let barracks1_destroyed = false;
+let barracks2_destroyed = false;
 
-# BARRACKS SIGNALS
-signal barracks_damage_received(barracks_id, new_hp)
-signal barracks_destroyed(barracks_id)
+let countdownActive = false;
+let countdownValue = 15;
+let countdownInterval = null;
 
-# CREEP SIGNALS
-signal creep_spawned(id, team, x, y, hp)
-signal creep_damaged(id, new_hp)
-signal creep_destroyed(id)
+const PLAYER_MAX_HP = 100;
 
-func _ready():
-	print("[NET] Starting network connection...")
-	connect_to_server()
+app.get('/', (req, res) => res.send('Multiplayer Server Active'));
+app.use(express.static('public'));
 
-func _log(msg):
-	print("[NET] ", msg)
+function broadcastToRoom(room, data) {
+    const packet = JSON.stringify(data);
+    let sentCount = 0;
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN && clientRoom.get(client) === room) {
+            client.send(packet);
+            sentCount++;
+        }
+    });
+    console.log("Broadcast to room '" + room + "' sent to " + sentCount + " clients. Type: " + data.type);
+}
 
-func connect_to_server():
-	is_reconnecting = false
-	connected = false
-	print("[NET] Attempting to connect to: ", SERVER_URL)
-	if socket.get_ready_state() != WebSocketPeer.STATE_CLOSED:
-		socket.close()
-	var err = socket.connect_to_url(SERVER_URL)
-	if err != OK:
-		print("[NET] Socket connection error: ", err)
-		_on_connection_failed("Ошибка сокета: " + str(err))
-	else:
-		print("[NET] Connection attempt initiated")
-		connection_changed.emit("connecting", "Подключение...")
+function spawnCreep(team) {
+    if ((team === 1 && barracks1_destroyed) || (team === 2 && barracks2_destroyed)) {
+        return;
+    }
+    creepIdCounter++;
+    const creepId = `creep_${creepIdCounter}`;
+    creeps[creepId] = { 
+        id: creepId, 
+        team: team, 
+        x: (team === 1 ? -830.0 : 1950.0), 
+        y: (team === 1 ? 463.0 : 462.0), 
+        hp: 30,
+        targetX: (team === 1 ? 1600 : 300),
+        speed: 1
+    };
+    broadcastToRoom('game', { type: 'creep_spawn', ...creeps[creepId] });
+}
 
-func disconnect_from_server():
-	socket.close()
-	connected = false
-	last_state = -1
-	my_session_id = ""
+function moveCreeps() {
+    for (let creepId in creeps) {
+        const creep = creeps[creepId];
+        const dx = creep.targetX - creep.x;
+        if (Math.abs(dx) > creep.speed) {
+            creep.x += (dx > 0 ? creep.speed : -creep.speed);
+            broadcastToRoom('game', { type: 'creep_move', id: creepId, x: creep.x, y: creep.y });
+        } else {
+            const targetTown = creep.team === 1 ? 2 : 1;
+            const damage = 10;
+            
+            if (targetTown === 1) {
+                town1_hp = Math.max(0, town1_hp - damage);
+                broadcastToRoom('game', { type: 'town_damage', town_id: 1, damage: damage, new_hp: town1_hp });
+            } else {
+                town2_hp = Math.max(0, town2_hp - damage);
+                broadcastToRoom('game', { type: 'town_damage', town_id: 2, damage: damage, new_hp: town2_hp });
+            }
+            
+            delete creeps[creepId];
+            broadcastToRoom('game', { type: 'creep_destroy', id: creepId });
+            
+            if (town1_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 2 });
+            else if (town2_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 1 });
+        }
+    }
+}
 
-func _on_connection_failed(reason):
-	connected = false
-	is_reconnecting = true
-	reconnect_timer = RECONNECT_DELAY
-	print("[NET] Connection failed: ", reason)
+function assignTeams() {
+    const ids = Object.keys(gamePlayers);
+    if (ids.length === 2) {
+        gamePlayers[ids[0]].team = 1;
+        gamePlayers[ids[1]].team = 2;
+        console.log("2 players: " + ids[0] + " -> team 1, " + ids[1] + " -> team 2");
+        return;
+    }
+    for (let i = ids.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+    }
+    ids.forEach((id, i) => {
+        gamePlayers[id].team = (i < Math.ceil(ids.length / 2)) ? 1 : 2;
+    });
+}
 
-func join():
-	print("NET: join() called, socket state: ", socket.get_ready_state())
-	if socket.get_ready_state() != WebSocketPeer.STATE_OPEN: 
-		print("NET: Socket not open, cannot join")
-		return
-	connected = true
-	if my_session_id == "":
-		my_session_id = "player_" + str(Time.get_ticks_msec()) + "_" + str(randi())
-	print("NET: Sending join message for ", my_session_id, " nickname: ", Global.player_nickname)
-	_send({
-		"type": "join",
-		"id": my_session_id,
-		"nickname": Global.player_nickname,
-		"character": Global.selected_character,
-		"x": 500, "y": 300
-	})
-	connection_changed.emit("connected", "OK")
+function startGameForAll() {
+    console.log("Game starting!");
+    Object.keys(lobbyPlayers).forEach(id => {
+        gamePlayers[id] = { ...lobbyPlayers[id], hp: PLAYER_MAX_HP, is_dead: false };
+        delete lobbyPlayers[id];
+    });
+    assignTeams();
+    town1_hp = 1000;
+    town2_hp = 1000;
+    barracks1_hp = 500;
+    barracks2_hp = 500;
+    barracks1_destroyed = false;
+    barracks2_destroyed = false;
+    
+    for (let id in creeps) delete creeps[id];
+    if (creepSpawnInterval) clearInterval(creepSpawnInterval);
+    
+    spawnCreep(1); spawnCreep(2);
+    creepSpawnInterval = setInterval(() => { spawnCreep(1); spawnCreep(2); }, 30000);
+    
+    if (global.creepMoveInterval) clearInterval(global.creepMoveInterval);
+    global.creepMoveInterval = setInterval(moveCreeps, 100);
 
-func _process(delta):
-	socket.poll()
-	var state = socket.get_ready_state()
-	if state != last_state:
-		print("NET: Socket state changed from ", last_state, " to ", state)
-		if state == WebSocketPeer.STATE_OPEN: 
-			print("NET: Socket opened, calling join()")
-			join()
-		elif state == WebSocketPeer.STATE_CLOSED and last_state != -1:
-			print("NET: Socket closed")
-			_on_connection_failed("Connection lost")
-		last_state = state
-	
-	if state == WebSocketPeer.STATE_OPEN and not connected and my_session_id == "":
-		print("NET: Socket open but not joined, forcing join()")
-		join()
+    wss.clients.forEach(client => {
+        if (clientRoom.get(client) === 'lobby') {
+            clientRoom.set(client, 'game');
+            client.send(JSON.stringify({ type: 'start_game' }));
+        }
+    });
+    
+    console.log("Game started! Players in game: " + Object.keys(gamePlayers).length);
+}
 
-	if is_reconnecting:
-		reconnect_timer -= delta
-		if reconnect_timer <= 0: connect_to_server()
+wss.on('connection', (ws) => {
+    console.log("New connection. Total clients: " + wss.clients.size);
+    let playerId = null;
 
-	while socket.get_available_packet_count() > 0:
-		var packet = socket.get_packet().get_string_from_utf8()
-		var data = JSON.parse_string(packet)
-		if data: _handle(data)
+    ws.on('message', data => {
+        try {
+            const message = JSON.parse(data);
+            console.log("Received: " + message.type);
+            
+            if (message.type === 'join') {
+                playerId = message.id;
+                clientId.set(ws, playerId); // СОХРАНЯЕМ ID
+                clientRoom.set(ws, 'lobby');
+                lobbyPlayers[playerId] = { 
+                    nickname: message.nickname || "Player", 
+                    character: message.character || 1, 
+                    x: message.x, 
+                    y: message.y, 
+                    flip: false 
+                };
+                
+                console.log("Player " + playerId + " joined lobby. Total lobby players: " + Object.keys(lobbyPlayers).length);
+                
+                // Отправляем текущих игроков в лобби новому игроку
+                const playersInLobby = {};
+                for (let id in lobbyPlayers) {
+                    if (id !== playerId) playersInLobby[id] = lobbyPlayers[id];
+                }
+                ws.send(JSON.stringify({ type: 'init', players: playersInLobby }));
+                
+                // Рассылаем всем в лобби что новый игрок присоединился
+                broadcastToRoom('lobby', { type: 'player_joined', id: playerId, ...lobbyPlayers[playerId] });
+                
+                // Запускаем обратный отсчет если 2+ игрока
+                const playersCount = Object.keys(lobbyPlayers).length;
+                if (playersCount >= 2 && !countdownActive) {
+                    countdownActive = true;
+                    countdownValue = 15;
+                    broadcastToRoom('lobby', { type: 'countdown_start', time: countdownValue });
+                    
+                    if (countdownInterval) clearInterval(countdownInterval);
+                    countdownInterval = setInterval(() => {
+                        countdownValue--;
+                        if (countdownValue <= 0) {
+                            clearInterval(countdownInterval);
+                            countdownInterval = null;
+                            countdownActive = false;
+                            startGameForAll();
+                        } else {
+                            broadcastToRoom('lobby', { type: 'countdown_update', time: countdownValue });
+                        }
+                    }, 1000);
+                }
+                return;
+            }
+            
+            // Получаем ID игрока для остальных сообщений
+            const pid = clientId.get(ws);
+            if (!pid) {
+                console.log("No playerId found for message: " + message.type);
+                return;
+            }
+            
+            switch (message.type) {
+                case 'move':
+                    const room = clientRoom.get(ws);
+                    const list = room === 'lobby' ? lobbyPlayers : gamePlayers;
+                    if (list[pid]) {
+                        list[pid].x = message.x;
+                        list[pid].y = message.y;
+                        list[pid].flip = message.flip;
+                        broadcastToRoom(room, { 
+                            type: 'player_moved', 
+                            id: pid, 
+                            x: message.x, 
+                            y: message.y, 
+                            flip: message.flip 
+                        });
+                    }
+                    break;
+                    
+                case 'chat':
+                    broadcastToRoom(clientRoom.get(ws), { 
+                        type: 'chat', 
+                        nickname: message.nickname, 
+                        message: message.message 
+                    });
+                    break;
 
-func _send(data: Dictionary):
-	var json_data = JSON.stringify(data)
-	_debug("SENDING: " + json_data)
-	if socket.get_ready_state() == WebSocketPeer.STATE_OPEN:
-		socket.send_text(json_data)
+                case 'creep_damage': {
+                    if (!gamePlayers[pid]) break;
+                    const creepId = message.creep_id;
+                    if (creeps[creepId]) {
+                        creeps[creepId].hp -= message.damage;
+                        broadcastToRoom('game', { type: 'creep_damage', id: creepId, new_hp: creeps[creepId].hp });
+                        if (creeps[creepId].hp <= 0) { 
+                            delete creeps[creepId]; 
+                            broadcastToRoom('game', { type: 'creep_destroy', id: creepId }); 
+                        }
+                    }
+                    break;
+                }
 
-# --- ОТПРАВКА ---
-func send_join():
-	if join_sent:
-		_debug("Join already sent, skipping")
-		return
-		
-	if my_session_id == "":
-		my_session_id = "player_" + str(Time.get_ticks_msec()) + "_" + str(randi())
-	_debug("Generated session ID: " + my_session_id)
-	
-	_debug("Sending join message for " + my_session_id)
-	join_sent = true
-	_send({
-		"type": "join",
-		"id": my_session_id,
-		"nickname": Global.player_nickname,
-		"character": Global.selected_character,
-		"x": 500, "y": 300
-	})
+                case 'town_damage': {
+                    if (!gamePlayers[pid]) break;
+                    const team = gamePlayers[pid].team;
+                    if ((message.town_id === 1 && team === 1) || (message.town_id === 2 && team === 2)) break;
+                    const dmg = Math.min(Math.max(parseInt(message.damage) || 0, 0), 200);
+                    if (message.town_id === 1) town1_hp = Math.max(0, town1_hp - dmg);
+                    else town2_hp = Math.max(0, town2_hp - dmg);
+                    const new_hp = message.town_id === 1 ? town1_hp : town2_hp;
+                    broadcastToRoom('game', { type: 'town_damage', town_id: message.town_id, damage: dmg, new_hp: new_hp });
+                    if (town1_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 2 });
+                    else if (town2_hp <= 0) broadcastToRoom('game', { type: 'game_over', winner: 1 });
+                    break;
+                }
 
-func send_move(x, y, flip):
-	_send({"type": "move", "x": x, "y": y, "flip": flip})
+                case 'barracks_damage': {
+                    if (!gamePlayers[pid]) break;
+                    const team = gamePlayers[pid].team;
+                    if ((message.barracks_id === 1 && team === 1) || (message.barracks_id === 2 && team === 2)) break;
+                    const dmg = Math.min(Math.max(parseInt(message.damage) || 0, 0), 200);
+                    
+                    if (message.barracks_id === 1 && !barracks1_destroyed) {
+                        barracks1_hp = Math.max(0, barracks1_hp - dmg);
+                        if (barracks1_hp <= 0) {
+                            barracks1_destroyed = true;
+                            broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 1 });
+                        }
+                        broadcastToRoom('game', { type: 'barracks_damage', barracks_id: 1, new_hp: barracks1_hp });
+                    } else if (message.barracks_id === 2 && !barracks2_destroyed) {
+                        barracks2_hp = Math.max(0, barracks2_hp - dmg);
+                        if (barracks2_hp <= 0) {
+                            barracks2_destroyed = true;
+                            broadcastToRoom('game', { type: 'barracks_destroyed', barracks_id: 2 });
+                        }
+                        broadcastToRoom('game', { type: 'barracks_damage', barracks_id: 2, new_hp: barracks2_hp });
+                    }
+                    break;
+                }
 
-func send_chat(msg: String):
-	_send({"type": "chat", "nickname": Global.player_nickname, "message": msg})
+                case 'respawn': {
+                    if (!gamePlayers[pid]) break;
+                    gamePlayers[pid].hp = PLAYER_MAX_HP;
+                    gamePlayers[pid].is_dead = false;
+                    const team = gamePlayers[pid].team;
+                    const spawnX = team === 1 ? 300 : 1600;
+                    broadcastToRoom('game', { type: 'respawn', id: pid, x: spawnX, y: 450, hp: PLAYER_MAX_HP });
+                    break;
+                }
 
-func send_level_ready():
-	_send({"type": "level_ready"})
+                case 'level_ready': {
+                    if (!gamePlayers[pid]) {
+                        // Если игрок еще не в игре - перемещаем
+                        if (lobbyPlayers[pid]) {
+                            gamePlayers[pid] = { ...lobbyPlayers[pid], hp: PLAYER_MAX_HP, is_dead: false };
+                            delete lobbyPlayers[pid];
+                        } else {
+                            console.log("Player " + pid + " not found in game or lobby");
+                            break;
+                        }
+                    }
+                    
+                    const others = {};
+                    for (let id in gamePlayers) {
+                        if (id !== pid) others[id] = gamePlayers[id];
+                    }
+                    
+                    const currentCreeps = {};
+                    for (let id in creeps) currentCreeps[id] = creeps[id];
+                    
+                    ws.send(JSON.stringify({ 
+                        type: 'init_game', 
+                        players: others, 
+                        my_team: gamePlayers[pid].team, 
+                        town1_hp: town1_hp, 
+                        town2_hp: town2_hp,
+                        creeps: currentCreeps 
+                    }));
+                    
+                    console.log("Sent init_game to " + pid + ". Players in game: " + Object.keys(gamePlayers).length);
+                    break;
+                }
+            }
+        } catch (e) { 
+            console.log("Error:", e); 
+        }
+    });
 
-func send_town_damage(town_id: int, damage: int):
-	_send({"type": "town_damage", "town_id": town_id, "damage": damage})
+    ws.on('close', () => {
+        const pid = clientId.get(ws);
+        if (pid) {
+            console.log("Player " + pid + " disconnected");
+            delete lobbyPlayers[pid];
+            delete gamePlayers[pid];
+            broadcastToRoom('game', { type: 'player_left', id: pid });
+            broadcastToRoom('lobby', { type: 'player_left', id: pid });
+            
+            if (Object.keys(lobbyPlayers).length < 2 && countdownActive) {
+                if (countdownInterval) {
+                    clearInterval(countdownInterval);
+                    countdownInterval = null;
+                }
+                countdownActive = false;
+                broadcastToRoom('lobby', { type: 'countdown_cancel' });
+            }
+        }
+        clientId.delete(ws);
+        clientRoom.delete(ws);
+    });
+});
 
-func send_barracks_damage(barracks_id: int, damage: int):
-	print("NET: Sending barracks damage - barracks_id: ", barracks_id, ", damage: ", damage)
-	_send({"type": "barracks_damage", "barracks_id": barracks_id, "damage": damage})
-
-func send_barracks_destroyed(barracks_id: int):
-	print("NET: Sending barracks destroyed - barracks_id: ", barracks_id)
-	_send({"type": "barracks_destroyed_client", "barracks_id": barracks_id})
-
-func send_player_damage(target_id: String, damage: int):
-	_send({"type": "player_damage", "target_id": target_id, "damage": damage})
-
-func send_creep_damage(creep_id: String, damage: int):
-	_send({"type": "creep_damage", "creep_id": creep_id, "damage": damage})
-
-func send_respawn():
-	_send({"type": "respawn"})
-
-# --- LOCAL DEBUG ---
-func _debug(msg: String):
-	print("[DEBUG] " + msg)
-
-# --- PROCESSING ---
-func _handle(data: Dictionary):
-	var t = data.get("type", "")
-	_debug("HANDLING MESSAGE TYPE: " + t)
-	match t:
-		"init":
-			_debug("Received init with " + str(data.get("players", {}).size()) + " players")
-			init_players.emit(data.get("players", {}))
-		"player_joined":
-			if data.get("id", "") != my_session_id:
-				print("NET: Player joined: ", data.get("nickname",""))
-				player_joined.emit(data.get("id",""), data.get("x",0), data.get("y",0), data.get("flip",false), data.get("nickname",""), data.get("character",1))
-		"player_moved":
-			if data.get("id", "") != my_session_id:
-				player_moved.emit(
-					data.get("id",""), 
-					data.get("x",0), 
-					data.get("y",0), 
-					data.get("flip",false)
-				)
-		"player_left":
-			player_left.emit(data.get("id", ""))
-		"chat":
-			chat_message_received.emit(data.get("nickname",""), data.get("message",""))
-		"start_game":
-			start_game.emit()
-		"countdown_start":
-			countdown_start.emit(data.get("time", 0))
-		"countdown_update":
-			countdown_update.emit(data.get("time", 0))
-		"countdown_cancel":
-			countdown_cancel.emit()
-		"init_game":
-			# Новый формат от сервера
-			init_game_players.emit(
-				data.get("players",{}), 
-				int(data.get("my_team",0)), 
-				int(data.get("town1_hp",0)), 
-				int(data.get("town2_hp",0)),
-				data.get("creeps",{})
-			)
-		"town_damage":
-			town_damage.emit(int(data.get("town_id",0)), int(data.get("damage",0)), int(data.get("new_hp",0)))
-		"barracks_damage":
-			barracks_damage_received.emit(str(data.get("barracks_id",0)), int(data.get("new_hp",0)))
-		"barracks_destroyed":
-			barracks_destroyed.emit(int(data.get("barracks_id",0)))
-		"player_damage":
-			var tid = data.get("target_id", "")
-			var nhp = data.get("new_hp", null)
-			if tid != "" and nhp != null:
-				player_damage_received.emit(tid, int(nhp))
-		"respawn":
-			var respawn_id = data.get("id", "")
-			var respawn_x = data.get("x", 0)
-			var respawn_y = data.get("y", 0)
-			var respawn_hp = data.get("hp", 150)
-			player_respawned.emit(respawn_id, respawn_x, respawn_y, respawn_hp)
-			print("NET: Respawn signal emitted for ", respawn_id, " HP: ", respawn_hp)
-		"game_over":
-			game_over.emit(data.get("winner", 0))
-		"game_timer_update":
-			game_timer_update.emit(data.get("time_left", 0))
-		"room_reset":
-			room_reset.emit()
-		"creep_spawn":
-			creep_spawned.emit(data.get("id"), int(data.get("team")), data.get("x"), data.get("y"), int(data.get("hp")))
-		"creep_move":
-			print("NET: Creep move - id: ", data.get("id"), " x: ", data.get("x"), " y: ", data.get("y"))
-		"creep_damage":
-			creep_damaged.emit(data.get("id"), int(data.get("new_hp")))
-		"creep_destroy":
-			creep_destroyed.emit(data.get("id"))
-		_:
-			_log("Неизвестный тип: " + t)
+const PORT = process.env.PORT || 2567;
+server.listen(PORT, '0.0.0.0', () => { 
+    console.log(`Server running on port ${PORT}`); 
+});
