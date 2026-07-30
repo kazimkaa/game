@@ -1,6 +1,3 @@
-Ниже полностью рабочий и проверенный server.js (включая исправление проверки ws.readyState и обработку ошибок). Скопируйте файл целиком и запустите node server.js.
-
-```js
 // server.js — сервер для Godot-клиента
 const http = require("http");
 const { WebSocketServer, WebSocket } = require("ws");
@@ -133,7 +130,7 @@ function removePlayer(id) {
 	if (!players.has(id)) return;
 
 	const player = players.get(id);
-	console.log(`[SERVER] Player removed: ${player.nickname} (${id})`);
+	console.log(`[SERVER] Player removed: player.nickname({player.nickname} (player.nickname({id})`);
 
 	if (player.ws && player.ws.disconnectTimer) {
 		clearTimeout(player.ws.disconnectTimer);
@@ -207,3 +204,96 @@ function assignTeam() {
 	if (t2 === 0 && t1 > 0) return 2;
 	if (t1 < t2) return 1;
 	if (t2 < t1) return 2;
+	return 1;
+}
+
+function publicPlayersDict(excludeId = null) {
+	const dict = {};
+	for (const [id, p] of players) {
+		if (id === excludeId) continue;
+		dict[id] = {
+			id: p.id,
+			nickname: p.nickname,
+			character: p.character,
+			x: p.x,
+			y: p.y,
+			flip: p.flip,
+			hp: p.hp,
+			is_dead: p.is_dead,
+			team: p.team
+		};
+	}
+	return dict;
+}
+
+// ================== ОБРАБОТКА СООБЩЕНИЙ ==================
+function handleMessage(ws, data) {
+	switch (data.type) {
+		case "join": handleJoin(ws, data); break;
+		case "move": handleMove(ws, data); break;
+		case "chat": handleChat(ws, data); break;
+		case "level_ready": handleLevelReady(ws, data); break;
+		case "town_damage": handleTownDamage(ws, data); break;
+		case "barracks_damage": handleBarracksDamage(ws, data); break;
+		case "player_damage": handlePlayerDamage(ws, data); break;
+		case "creep_damage": handleCreepDamage(ws, data); break;
+		case "respawn": handleRespawn(ws, data); break;
+		case "ping": handlePing(ws, data); break;
+		default: console.log("[SERVER] Unknown message type:", data.type);
+	}
+}
+
+// ================== ОБРАБОТЧИКИ ==================
+function handleJoin(ws, data) {
+	const id = data.id;
+	if (!id) return;
+
+	if (players.has(id)) {
+		console.log("[SERVER] Reconnect detected for:", id);
+		const old = players.get(id);
+		if (old.ws !== ws) {
+			old.ws.terminate();
+		}
+		players.delete(id);
+	}
+
+	if (matchState === "playing" || matchState === "finished") {
+		send(ws, {
+			type: "system_message",
+			message: "Игра уже идёт, подождите следующего матча."
+		});
+		return;
+	}
+
+	ws.playerId = id;
+	ws.isAlive = true;
+	if (ws.disconnectTimer) {
+		clearTimeout(ws.disconnectTimer);
+		ws.disconnectTimer = null;
+	}
+
+	const team = assignTeam();
+	const player = {
+		id,
+		ws,
+		nickname: data.nickname || "Player",
+		character: data.character || 1,
+		x: data.x || 0,
+		y: data.y || 0,
+		flip: false,
+		team: team,
+		hp: 100,
+		is_dead: false
+	};
+	players.set(id, player);
+
+	console.log(`[SERVER] player.nicknamejoinedas{player.nickname} joined asplayer.nicknamejoinedas{id}, team player.team.Total:{player.team}. Total:player.team.Total:{players.size}`);
+
+	send(ws, {
+		type: "init",
+		players: publicPlayersDict(id),
+		my_team: player.team
+	});
+
+	broadcast({
+		type
