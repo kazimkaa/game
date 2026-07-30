@@ -630,3 +630,479 @@ function send(ws,data){
 	}
 
 }
+// ================= START GAME =================
+
+
+function checkStart(){
+
+
+	if(
+		gameState==="lobby" &&
+		players.size>=MIN_PLAYERS_TO_START
+	){
+
+		startCountdown();
+
+	}
+
+}
+
+
+
+
+
+
+function startCountdown(){
+
+
+	gameState="countdown";
+
+
+	let time=COUNTDOWN_SECONDS;
+
+
+
+	broadcast({
+
+		type:"countdown_start",
+
+		time:time
+
+	});
+
+
+
+	countdownTimer=setInterval(()=>{
+
+
+		time--;
+
+
+
+		broadcast({
+
+			type:"countdown_update",
+
+			time:time
+
+		});
+
+
+
+		if(time<=0){
+
+
+			clearInterval(countdownTimer);
+
+			countdownTimer=null;
+
+
+			startGame();
+
+
+		}
+
+
+	},1000);
+
+
+}
+
+
+
+
+
+
+
+function startGame(){
+
+
+	gameState="playing";
+
+
+
+	broadcast({
+
+		type:"start_game"
+
+	});
+
+
+
+	broadcast({
+
+		type:"init_game",
+
+		players:getPlayers(),
+
+		town1_hp:town1_hp,
+
+		town2_hp:town2_hp,
+
+		barracks1_hp:barracks1_hp,
+
+		barracks2_hp:barracks2_hp,
+
+		barracks1_destroyed:barracks1_destroyed,
+
+		barracks2_destroyed:barracks2_destroyed
+
+	});
+
+
+
+	startCreeps();
+
+}
+
+
+
+
+
+
+
+
+
+// ================= PLAYER DAMAGE =================
+
+
+function handlePlayerDamage(ws,data){
+
+
+	const attacker=players.get(ws.playerId);
+
+
+	if(!attacker)
+		return;
+
+
+
+	const target=players.get(
+		data.target_id
+	);
+
+
+
+	if(!target)
+		return;
+
+
+
+	if(target.team===attacker.team)
+		return;
+
+
+
+	if(target.dead)
+		return;
+
+
+
+	target.hp-=data.damage || 25;
+
+
+
+	if(target.hp<=0){
+
+
+		target.hp=0;
+
+		target.dead=true;
+
+
+	}
+
+
+
+	broadcast({
+
+		type:"player_damage",
+
+		target_id:target.id,
+
+		new_hp:target.hp
+
+	});
+
+
+
+
+	if(target.dead){
+
+
+		broadcast({
+
+			type:"respawn",
+
+			id:target.id,
+
+			x:
+			target.team===1
+			?
+			TEAM1_SPAWN.x
+			:
+			TEAM2_SPAWN.x,
+
+
+			y:450,
+
+			hp:100
+
+		});
+
+
+		setTimeout(()=>{
+
+
+			if(!players.has(target.id))
+				return;
+
+
+
+			target.hp=100;
+
+			target.dead=false;
+
+
+
+			broadcast({
+
+				type:"player_damage",
+
+				target_id:target.id,
+
+				new_hp:100
+
+			});
+
+
+
+		},5000);
+
+
+	}
+
+
+}
+
+
+
+
+
+
+
+
+
+// ================= RESPAWN =================
+
+
+function handleRespawn(ws){
+
+
+	const p=players.get(ws.playerId);
+
+
+	if(!p)
+		return;
+
+
+
+	p.hp=100;
+
+	p.dead=false;
+
+
+
+	p.x=
+	p.team===1
+	?
+	TEAM1_SPAWN.x
+	:
+	TEAM2_SPAWN.x;
+
+
+	p.y=450;
+
+
+
+	send(ws,{
+
+		type:"respawn",
+
+		id:p.id,
+
+		x:p.x,
+
+		y:p.y,
+
+		hp:p.hp
+
+	});
+
+
+}
+
+
+
+
+
+
+
+
+
+
+// ================= TOWN DAMAGE =================
+
+
+function handleTownDamage(ws,data){
+
+
+	const p=players.get(ws.playerId);
+
+
+	if(!p)
+		return;
+
+
+
+	let town=data.town_id;
+
+
+
+	if(town===1){
+
+		town1_hp-=data.damage || 10;
+
+		if(town1_hp<0)
+			town1_hp=0;
+
+
+	}
+	else{
+
+		town2_hp-=data.damage || 10;
+
+		if(town2_hp<0)
+			town2_hp=0;
+
+	}
+
+
+
+
+	broadcast({
+
+		type:"town_damage",
+
+		town_id:town,
+
+		damage:data.damage,
+
+		new_hp:
+		town===1
+		?
+		town1_hp
+		:
+		town2_hp
+
+	});
+
+
+
+
+
+	checkWin();
+
+}
+
+
+
+
+
+
+
+
+
+// ================= BARRACKS =================
+
+
+function handleBarracksDamage(ws,data){
+
+
+	let id=data.barracks_id;
+
+
+	let hp;
+
+
+
+	if(id===1){
+
+
+		barracks1_hp-=data.damage || 10;
+
+
+		if(barracks1_hp<=0){
+
+			barracks1_hp=0;
+
+			barracks1_destroyed=true;
+
+
+		}
+
+
+		hp=barracks1_hp;
+
+
+	}
+	else{
+
+
+		barracks2_hp-=data.damage || 10;
+
+
+		if(barracks2_hp<=0){
+
+			barracks2_hp=0;
+
+			barracks2_destroyed=true;
+
+		}
+
+
+		hp=barracks2_hp;
+
+
+	}
+
+
+
+	broadcast({
+
+		type:"barracks_damage",
+
+		barracks_id:id,
+
+		new_hp:hp
+
+	});
+
+
+
+	if(hp<=0){
+
+
+		broadcast({
+
+			type:"barracks_destroyed",
+
+			barracks_id:id
+
+		});
+
+
+	}
+
+
+}
