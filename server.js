@@ -1,5 +1,6 @@
+// server.js — сервер для Godot-клиента
 const http = require("http");
-const { WebSocketServer, WebSocket } = require("ws"); // добавил WebSocket
+const { WebSocketServer, WebSocket } = require("ws");
 
 // ================== КОНСТАНТЫ ==================
 const PORT = process.env.PORT || 3000;
@@ -44,7 +45,7 @@ let town1_hp = TOWN_MAX_HP;
 let town2_hp = TOWN_MAX_HP;
 let barracks1_hp = BARRACKS_MAX_HP;
 let barracks2_hp = BARRACKS_MAX_HP;
-let barr1_destroyed = false;
+let barracks1_destroyed = false;
 let barracks2_destroyed = false;
 
 // ================== HTTP + WS ==================
@@ -115,7 +116,6 @@ function startPingLoop() {
 					continue;
 				}
 				p.ws.isAlive = false;
-				// ping — у ws есть метод ping()
 				p.ws.ping();
 			} catch (e) {
 				console.log("[SERVER] Ping error for", id, e.message);
@@ -130,7 +130,7 @@ function removePlayer(id) {
 	if (!players.has(id)) return;
 
 	const player = players.get(id);
-	console.log(`[SERVER] Player removed: ${player.nickname} (${id})`);
+	console.log(`[SERVER] Player removed: player.nickname({player.nickname} (player.nickname({id})`);
 
 	if (player.ws && player.ws.disconnectTimer) {
 		clearTimeout(player.ws.disconnectTimer);
@@ -159,11 +159,9 @@ function removePlayer(id) {
 // ================== ВСПОМОГАТЕЛЬНЫЕ ==================
 function send(ws, data) {
 	try {
-		// правильная проверка: WebSocket.OPEN
 		if (ws && ws.readyState === WebSocket.OPEN) {
 			ws.send(JSON.stringify(data));
 		} else {
-			// логируем пропуск — это поможет в отладке
 			console.log("[SERVER] send skipped, socket not open:", data.type);
 		}
 	} catch (e) {
@@ -209,16 +207,4 @@ function assignTeam() {
 	return 1;
 }
 
-function publicPlayersDict(excludeId = null) {
-	const dict = {};
-	for (const [id, p] of players) {
-		if (id === excludeId) continue;
-		dict[id] = {
-			id: p.id,
-			nickname: p.nickname,
-			character: p.character,
-			x: p.x,
-			y: p.y,
-			flip: p.flip,
-			hp: p.hp,
-			is_dead: p
+function publicPlayersDict(excludeId =
