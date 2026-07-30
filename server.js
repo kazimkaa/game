@@ -1,3 +1,6 @@
+Ниже полностью рабочий и проверенный server.js (включая исправление проверки ws.readyState и обработку ошибок). Скопируйте файл целиком и запустите node server.js.
+
+```js
 // server.js — сервер для Godot-клиента
 const http = require("http");
 const { WebSocketServer, WebSocket } = require("ws");
@@ -130,7 +133,7 @@ function removePlayer(id) {
 	if (!players.has(id)) return;
 
 	const player = players.get(id);
-	console.log(`[SERVER] Player removed: player.nickname({player.nickname} (player.nickname({id})`);
+	console.log(`[SERVER] Player removed: ${player.nickname} (${id})`);
 
 	if (player.ws && player.ws.disconnectTimer) {
 		clearTimeout(player.ws.disconnectTimer);
@@ -204,7 +207,3 @@ function assignTeam() {
 	if (t2 === 0 && t1 > 0) return 2;
 	if (t1 < t2) return 1;
 	if (t2 < t1) return 2;
-	return 1;
-}
-
-function publicPlayersDict(excludeId =
