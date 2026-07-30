@@ -1,438 +1,247 @@
 // server.js
-// WebSocket сервер для Godot MOBA игры
+// Godot WebSocket MOBA server
 
 const http = require("http");
 const { WebSocketServer, WebSocket } = require("ws");
 
 
-// ================== CONFIG ==================
+// ================= CONFIG =================
 
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
+
+const MAX_PLAYERS = 8;
 
 const MIN_PLAYERS_TO_START = 2;
+
 const COUNTDOWN_SECONDS = 15;
 
-const TICK_RATE = 100;
 
 const PLAYER_HP = 100;
 
 const TOWN_HP = 1000;
+
 const BARRACKS_HP = 500;
 
-const CREEP_HP = 80;
-const CREEP_SPEED = 40;
-const CREEP_DAMAGE = 10;
-
-const PLAYER_DAMAGE = 20;
-
-const ATTACK_RANGE = 60;
-
-
-// ================== MAP ==================
 
 const TEAM1_SPAWN = {
-    x:300,
-    y:450
+	x:300,
+	y:450
 };
+
 
 const TEAM2_SPAWN = {
-    x:1600,
-    y:450
+	x:1600,
+	y:450
 };
 
 
-const TOWN = {
-    1:{
-        x:200,
-        hp:TOWN_HP
-    },
 
-    2:{
-        x:1700,
-        hp:TOWN_HP
-    }
-};
+const TICK = 100;
 
 
-const BARRACKS = {
 
-    1:{
-        x:500,
-        hp:BARRACKS_HP,
-        destroyed:false
-    },
+// ================= STATE =================
 
-    2:{
-        x:1400,
-        hp:BARRACKS_HP,
-        destroyed:false
-    }
-
-};
-
-
-// ================== STATE ==================
 
 const players = new Map();
 
 const creeps = new Map();
 
+
 let nextCreepId = 1;
 
 
-let gameState = "lobby";
+let gameState="lobby";
 
-let countdownTimer = null;
 
-let gameTickTimer = null;
+let countdown=null;
 
-let creepSpawnTimer = null;
 
+let countdownTimer=null;
 
-// ================== SERVER ==================
 
-const server = http.createServer((req,res)=>{
+let creepTimer=null;
 
-    res.writeHead(200,{
-        "Content-Type":"text/plain"
-    });
 
-    res.end(
-        "Godot game server running"
-    );
 
-});
+let town1_hp=TOWN_HP;
+let town2_hp=TOWN_HP;
 
 
-const wss = new WebSocketServer({
-    server
-});
+let barracks1_hp=BARRACKS_HP;
+let barracks2_hp=BARRACKS_HP;
 
 
-server.listen(PORT,()=>{
+let barracks1_destroyed=false;
+let barracks2_destroyed=false;
 
-    console.log(
-        "[SERVER] Started on",
-        PORT
-    );
 
-});
 
 
 
-// ================== NETWORK ==================
+// ================= SERVER =================
 
-function send(ws,data){
 
-    if(!ws)
-        return;
+const server=http.createServer(
+(req,res)=>{
 
+	res.writeHead(
+		200,
+		{
+			"Content-Type":"text/plain"
+		}
+	);
 
-    if(ws.readyState === WebSocket.OPEN){
-
-        ws.send(
-            JSON.stringify(data)
-        );
-
-    }
-
-}
-
-
-
-function broadcast(data,except=null){
-
-    for(const p of players.values()){
-
-        if(p.ws!==except){
-
-            send(
-                p.ws,
-                data
-            );
-
-        }
-
-    }
-
-}
-
-
-
-// ================== PLAYERS ==================
-
-function getPlayers(){
-
-    let result={};
-
-
-    for(const [id,p] of players){
-
-        result[id]={
-
-            id:p.id,
-
-            nickname:p.nickname,
-
-            character:p.character,
-
-            team:p.team,
-
-            hp:p.hp,
-
-            x:p.x,
-
-            y:p.y,
-
-            flip:p.flip,
-
-            dead:p.dead
-
-        };
-
-    }
-
-
-    return result;
-
-}
-
-
-
-function assignTeam(){
-
-    let t1=0;
-    let t2=0;
-
-
-    for(const p of players.values()){
-
-        if(p.team===1)
-            t1++;
-
-        if(p.team===2)
-            t2++;
-
-    }
-
-
-    if(t1<=t2)
-        return 1;
-
-
-    return 2;
-
-}
-
-
-
-function spawnPosition(team){
-
-    if(team===1)
-        return TEAM1_SPAWN;
-
-
-    return TEAM2_SPAWN;
-
-}// ================== CONNECTION ==================
-
-wss.on("connection",(ws)=>{
-
-
-    console.log("[SERVER] New player connected");
-
-
-    ws.playerId=null;
-
-
-    ws.on("message",(raw)=>{
-
-
-        let data;
-
-
-        try{
-
-            data=JSON.parse(
-                raw.toString()
-            );
-
-        }
-        catch(e){
-
-            console.log(
-                "[SERVER] Bad JSON"
-            );
-
-            return;
-
-        }
-
-
-
-        handleMessage(
-            ws,
-            data
-        );
-
-
-    });
-
-
-
-    ws.on("close",()=>{
-
-
-        if(!ws.playerId)
-            return;
-
-
-
-        console.log(
-            "[SERVER] Player disconnected:",
-            ws.playerId
-        );
-
-
-
-        players.delete(
-            ws.playerId
-        );
-
-
-
-        broadcast({
-
-            type:"player_left",
-
-            id:ws.playerId
-
-        });
-
-
-
-        broadcast({
-
-            type:"players_list",
-
-            players:getPlayers()
-
-        });
-
-
-
-        checkCancelCountdown();
-
-
-    });
-
-
-
-    ws.on("error",(err)=>{
-
-        console.log(
-            "[SERVER] Socket error",
-            err.message
-        );
-
-    });
-
+	res.end(
+		"Godot server online"
+	);
 
 });
 
 
 
+const wss=new WebSocketServer({
+	server
+});
 
-// ================== MESSAGE HANDLER ==================
+
+
+server.listen(
+	PORT,
+	()=>{
+		console.log(
+			"[SERVER] START",
+			PORT
+		);
+	}
+);
+
+
+
+
+
+// ================= CONNECTION =================
+
+
+wss.on(
+	"connection",
+	ws=>{
+
+
+		console.log(
+			"[SERVER] connection"
+		);
+
+
+		ws.playerId=null;
+
+
+
+		ws.on(
+			"message",
+			raw=>{
+
+
+				let data;
+
+
+				try{
+
+					data=JSON.parse(
+						raw.toString()
+					);
+
+				}
+				catch(e){
+
+					return;
+
+				}
+
+
+
+				handleMessage(
+					ws,
+					data
+				);
+
+			}
+		);
+
+
+
+		ws.on(
+			"close",
+			()=>{
+
+
+				if(ws.playerId){
+
+					removePlayer(
+						ws.playerId
+					);
+
+				}
+
+			}
+		);
+
+
+	}
+);
+// ================= MESSAGE HANDLER =================
+
 
 function handleMessage(ws,data){
 
 
-    switch(data.type){
+	switch(data.type){
 
 
-        case "join":
-
-            joinPlayer(
-                ws,
-                data
-            );
-
-        break;
+		case "join":
+			handleJoin(ws,data);
+			break;
 
 
-
-        case "move":
-
-            movePlayer(
-                ws,
-                data
-            );
-
-        break;
+		case "move":
+			handleMove(ws,data);
+			break;
 
 
-
-        case "ping":
-
-            send(ws,{
-                type:"pong"
-            });
-
-        break;
+		case "level_ready":
+			handleLevelReady(ws,data);
+			break;
 
 
-
-        case "level_ready":
-
-            levelReady(
-                ws,
-                data
-            );
-
-        break;
+		case "player_damage":
+			handlePlayerDamage(ws,data);
+			break;
 
 
-
-        case "player_damage":
-
-            playerDamage(
-                data
-            );
-
-        break;
+		case "town_damage":
+			handleTownDamage(ws,data);
+			break;
 
 
-
-        case "town_damage":
-
-            townDamage(
-                data
-            );
-
-        break;
+		case "barracks_damage":
+			handleBarracksDamage(ws,data);
+			break;
 
 
-
-        case "barracks_damage":
-
-            barracksDamage(
-                data
-            );
-
-        break;
+		case "respawn":
+			handleRespawn(ws);
+			break;
 
 
+		case "ping":
 
-        default:
+			send(ws,{
+				type:"pong"
+			});
 
-            console.log(
-                "[SERVER] Unknown:",
-                data.type
-            );
+			break;
 
-    }
-
+	}
 
 }
 
@@ -440,488 +249,168 @@ function handleMessage(ws,data){
 
 
 
-// ================== JOIN ==================
 
-function joinPlayer(ws,data){
 
+// ================= JOIN =================
 
-    if(!data.id)
-        return;
 
+function handleJoin(ws,data){
 
 
-    if(players.has(data.id)){
+	if(players.size>=MAX_PLAYERS){
 
+		send(ws,{
+			type:"system_message",
+			message:"Server full"
+		});
 
-        console.log(
-            "[SERVER] Reconnect:",
-            data.id
-        );
+		return;
 
+	}
 
-        players.delete(
-            data.id
-        );
 
 
-    }
+	const id=data.id;
 
 
+	if(!id)
+		return;
 
-    if(gameState==="playing"){
 
 
-        send(ws,{
+	// reconnect
 
-            type:"system_message",
+	if(players.has(id)){
 
-            message:"Game already started"
+		players.get(id).ws=ws;
 
-        });
+		ws.playerId=id;
 
+		return;
 
-        return;
+	}
 
-    }
 
 
 
-    const team =
-        assignTeam();
 
+	const team=getTeam();
 
 
-    const pos =
-        spawnPosition(team);
 
+	const spawn =
+	team===1
+	?
+	TEAM1_SPAWN
+	:
+	TEAM2_SPAWN;
 
 
-    const player={
 
 
-        id:data.id,
+	const player={
 
 
-        ws:ws,
+		id:id,
 
 
-        nickname:
-            data.nickname ||
-            "Player",
+		ws:ws,
 
 
-        character:
-            data.character ||
-            1,
+		nickname:data.nickname || "Player",
 
 
-        team:team,
+		character:data.character || 1,
 
 
-        x:pos.x,
+		team:team,
 
 
-        y:pos.y,
+		x:spawn.x,
 
 
-        flip:false,
+		y:spawn.y,
 
 
-        hp:PLAYER_HP,
+		flip:false,
 
 
-        dead:false
+		hp:PLAYER_HP,
 
 
-    };
+		dead:false
 
 
+	};
 
-    players.set(
-        player.id,
-        player
-    );
 
 
-    ws.playerId=
-        player.id;
+	players.set(
+		id,
+		player
+	);
 
 
+	ws.playerId=id;
 
-    console.log(
-        "[SERVER] Player joined:",
-        player.nickname,
-        "team",
-        team
-    );
 
 
+	console.log(
+		"[SERVER] join:",
+		player.nickname,
+		id,
+		"team",
+		team
+	);
 
 
-    send(ws,{
 
-        type:"init",
 
-        players:getPlayers(),
 
-        my_team:team
+	// отправляем новому игроку список
 
-    });
+	send(ws,{
 
+		type:"init",
 
+		my_team:team,
 
+		players:getPlayers(id)
 
+	});
 
-    broadcast({
 
-        type:"player_joined",
 
-        id:player.id,
 
-        nickname:player.nickname,
 
-        character:player.character,
 
-        team:player.team,
+	// сообщаем другим
 
-        x:player.x,
+	broadcast({
 
-        y:player.y,
+		type:"player_joined",
 
-        flip:false
+		id:id,
 
-    },ws);
+		x:player.x,
 
+		y:player.y,
 
+		flip:false,
 
+		nickname:player.nickname,
 
-    broadcast({
+		character:player.character,
 
-        type:"players_list",
+		team:player.team
 
-        players:getPlayers()
+	},ws);
 
-    });
 
 
 
-    checkStartCountdown();
 
-
-}
-
-
-
-
-
-// ================== MOVE ==================
-
-function movePlayer(ws,data){
-
-
-    const p =
-        players.get(
-            ws.playerId
-        );
-
-
-
-    if(!p)
-        return;
-
-
-
-    if(typeof data.x==="number")
-        p.x=data.x;
-
-
-    if(typeof data.y==="number")
-        p.y=data.y;
-
-
-
-    p.flip =
-        !!data.flip;
-
-
-
-
-    broadcast({
-
-        type:"player_moved",
-
-        id:p.id,
-
-        x:p.x,
-
-        y:p.y,
-
-        flip:p.flip
-
-    },ws);
-
-
-}// ================== GAME START ==================
-
-function checkStartCountdown(){
-
-    if(gameState!=="lobby")
-        return;
-
-
-    if(players.size < MIN_PLAYERS_TO_START)
-        return;
-
-
-
-    gameState="countdown";
-
-    let time =
-        COUNTDOWN_SECONDS;
-
-
-
-    broadcast({
-
-        type:"countdown_start",
-
-        time:time
-
-    });
-
-
-
-    countdownTimer=setInterval(()=>{
-
-
-        time--;
-
-
-
-        if(time<=0){
-
-
-            clearInterval(
-                countdownTimer
-            );
-
-
-            startGame();
-
-
-            return;
-
-        }
-
-
-
-        broadcast({
-
-            type:"countdown_update",
-
-            time:time
-
-        });
-
-
-
-    },1000);
-
-
-}
-
-
-
-
-
-function checkCancelCountdown(){
-
-
-    if(gameState!=="countdown")
-        return;
-
-
-
-    if(players.size>=MIN_PLAYERS_TO_START)
-        return;
-
-
-
-    clearInterval(
-        countdownTimer
-    );
-
-
-
-    gameState="lobby";
-
-
-
-    broadcast({
-
-        type:"countdown_cancel"
-
-    });
-
-
-}
-
-
-
-
-
-// ================== START MATCH ==================
-
-function startGame(){
-
-
-    gameState="playing";
-
-
-
-    for(const p of players.values()){
-
-
-        const pos =
-            spawnPosition(
-                p.team
-            );
-
-
-        p.x=pos.x;
-        p.y=pos.y;
-
-        p.hp=PLAYER_HP;
-        p.dead=false;
-
-
-    }
-
-
-
-
-    broadcast({
-
-        type:"start_game"
-
-    });
-
-
-
-    broadcast({
-
-        type:"init_game",
-
-        players:getPlayers(),
-
-        town1_hp:TOWN[1].hp,
-
-        town2_hp:TOWN[2].hp,
-
-        barracks1_hp:BARRACKS[1].hp,
-
-        barracks2_hp:BARRACKS[2].hp,
-
-        barracks1_destroyed:
-            BARRACKS[1].destroyed,
-
-        barracks2_destroyed:
-            BARRACKS[2].destroyed
-
-    });
-
-
-
-    gameTickTimer=setInterval(
-        gameTick,
-        TICK_RATE
-    );
-
-
-
-    creepSpawnTimer=setInterval(
-        spawnWave,
-        15000
-    );
-
-
-}
-
-
-
-
-// ================== CREEPS ==================
-
-function spawnWave(){
-
-
-    createCreep(
-        1,
-        550,
-        450
-    );
-
-
-    createCreep(
-        2,
-        1350,
-        450
-    );
-
-
-}
-
-
-
-
-function createCreep(team,x,y){
-
-
-    const id =
-        nextCreepId++;
-
-
-
-    const creep={
-
-
-        id:id,
-
-        team:team,
-
-        x:x,
-
-        y:y,
-
-        hp:CREEP_HP
-
-    };
-
-
-
-    creeps.set(
-        id,
-        creep
-    );
-
-
-
-    broadcast({
-
-        type:"creep_spawn",
-
-        id:id,
-
-        team:team,
-
-        x:x,
-
-        y:y,
-
-        hp:CREEP_HP
-
-    });
-
+	checkStart();
 
 }
 
@@ -930,165 +419,37 @@ function createCreep(team,x,y){
 
 
 
-// ================== GAME LOOP ==================
 
-function gameTick(){
+// ================= TEAM =================
 
 
-    for(const creep of creeps.values()){
+function getTeam(){
 
 
-        if(creep.team===1){
+	let t1=0;
+	let t2=0;
 
-            creep.x +=
-                CREEP_SPEED *
-                (TICK_RATE/1000);
 
-        }
-        else{
 
-            creep.x -=
-                CREEP_SPEED *
-                (TICK_RATE/1000);
+	for(const p of players.values()){
 
-        }
 
+		if(p.team===1)
+			t1++;
 
 
+		if(p.team===2)
+			t2++;
 
-        // проверяем игроков рядом
+	}
 
-        for(const player of players.values()){
 
 
-            if(player.team===creep.team)
-                continue;
+	if(t1<=t2)
+		return 1;
 
 
-
-            const dx =
-                player.x-creep.x;
-
-
-            const dy =
-                player.y-creep.y;
-
-
-            const distance =
-                Math.sqrt(
-                    dx*dx+
-                    dy*dy
-                );
-
-
-
-            if(distance <= ATTACK_RANGE){
-
-
-                damagePlayer(
-                    player,
-                    CREEP_DAMAGE
-                );
-
-
-            }
-
-
-        }
-
-
-
-        broadcast({
-
-            type:"creep_move",
-
-            id:creep.id,
-
-            x:creep.x,
-
-            y:creep.y
-
-        });
-
-
-
-    }
-
-
-}// ================== PLAYER DAMAGE ==================
-
-function damagePlayer(player, damage){
-
-
-    if(player.dead)
-        return;
-
-
-
-    player.hp -= damage;
-
-
-
-    broadcast({
-
-        type:"player_damage",
-
-        target_id:player.id,
-
-        new_hp:player.hp
-
-    });
-
-
-
-
-    if(player.hp<=0){
-
-
-        player.dead=true;
-
-
-        setTimeout(()=>{
-
-
-            const pos =
-                spawnPosition(
-                    player.team
-                );
-
-
-            player.x=pos.x;
-
-            player.y=pos.y;
-
-            player.hp=PLAYER_HP;
-
-            player.dead=false;
-
-
-
-            broadcast({
-
-                type:"respawn",
-
-                id:player.id,
-
-                x:player.x,
-
-                y:player.y,
-
-                hp:player.hp
-
-            });
-
-
-
-        },5000);
-
-
-
-    }
-
+	return 2;
 
 }
 
@@ -1096,26 +457,127 @@ function damagePlayer(player, damage){
 
 
 
-// ================== PLAYER ATTACK ==================
-
-function playerDamage(data){
-
-
-    const target =
-        players.get(
-            data.target_id
-        );
-
-
-    if(!target)
-        return;
 
 
 
-    damagePlayer(
-        target,
-        data.damage || PLAYER_DAMAGE
-    );
+// ================= PLAYERS LIST =================
+
+
+function getPlayers(exclude=null){
+
+
+	let result={};
+
+
+
+	for(const [id,p] of players){
+
+
+		if(id===exclude)
+			continue;
+
+
+
+		result[id]={
+
+
+			id:p.id,
+
+			nickname:p.nickname,
+
+			character:p.character,
+
+			team:p.team,
+
+			x:p.x,
+
+			y:p.y,
+
+			flip:p.flip,
+
+			hp:p.hp
+
+
+		};
+
+
+	}
+
+
+
+	return result;
+
+}
+
+
+
+
+
+
+
+
+// ================= MOVE =================
+
+
+function handleMove(ws,data){
+
+
+	const p=players.get(ws.playerId);
+
+
+	if(!p)
+		return;
+
+
+
+	p.x=data.x;
+
+	p.y=data.y;
+
+	p.flip=data.flip;
+
+
+
+	broadcast({
+
+		type:"player_moved",
+
+		id:p.id,
+
+		x:p.x,
+
+		y:p.y,
+
+		flip:p.flip
+
+
+	},ws);
+
+}
+
+
+
+
+
+
+
+
+// ================= LEVEL READY =================
+
+
+function handleLevelReady(ws,data){
+
+
+	const p=players.get(ws.playerId);
+
+
+	if(!p)
+		return;
+
+
+	p.x=data.x;
+
+	p.y=data.y;
 
 
 }
@@ -1126,66 +588,25 @@ function playerDamage(data){
 
 
 
-// ================== BARRACKS DAMAGE ==================
-
-function barracksDamage(data){
+// ================= BROADCAST =================
 
 
-    const id =
-        data.barracks_id;
+function broadcast(data,except=null){
 
 
-
-    if(!BARRACKS[id])
-        return;
+	for(const p of players.values()){
 
 
-
-    if(BARRACKS[id].destroyed)
-        return;
-
+		if(p.ws===except)
+			continue;
 
 
+		send(
+			p.ws,
+			data
+		);
 
-    BARRACKS[id].hp -=
-        data.damage || 10;
-
-
-
-
-    broadcast({
-
-        type:"barracks_damage",
-
-        barracks_id:id,
-
-        new_hp:BARRACKS[id].hp
-
-    });
-
-
-
-
-    if(BARRACKS[id].hp<=0){
-
-
-
-        BARRACKS[id].destroyed=true;
-
-
-
-        broadcast({
-
-            type:"barracks_destroyed",
-
-            barracks_id:id
-
-        });
-
-
-
-    }
-
+	}
 
 }
 
@@ -1194,193 +615,18 @@ function barracksDamage(data){
 
 
 
-// ================== TOWN DAMAGE ==================
-
-function townDamage(data){
+function send(ws,data){
 
 
-    const id =
-        data.town_id;
+	if(
+		ws &&
+		ws.readyState===WebSocket.OPEN
+	){
 
+		ws.send(
+			JSON.stringify(data)
+		);
 
-
-    if(!TOWN[id])
-        return;
-
-
-
-    TOWN[id].hp -=
-        data.damage || 10;
-
-
-
-
-    broadcast({
-
-        type:"town_damage",
-
-        town_id:id,
-
-        damage:data.damage || 10,
-
-        new_hp:TOWN[id].hp
-
-    });
-
-
-
-
-    if(TOWN[id].hp<=0){
-
-
-
-        endGame(
-            id===1 ? 2 : 1
-        );
-
-
-    }
-
+	}
 
 }
-
-
-
-
-
-// ================== END GAME ==================
-
-function endGame(winner){
-
-
-    if(gameState==="finished")
-        return;
-
-
-
-    gameState="finished";
-
-
-
-    clearInterval(
-        gameTickTimer
-    );
-
-
-    clearInterval(
-        creepSpawnTimer
-    );
-
-
-
-    broadcast({
-
-        type:"game_over",
-
-        winner:winner
-
-    });
-
-
-
-    setTimeout(()=>{
-
-
-        resetGame();
-
-
-    },10000);
-
-
-
-}
-
-
-
-
-
-
-// ================== RESET ==================
-
-function resetGame(){
-
-
-    gameState="lobby";
-
-
-
-    creeps.clear();
-
-
-
-    TOWN[1].hp=TOWN_HP;
-
-    TOWN[2].hp=TOWN_HP;
-
-
-
-    BARRACKS[1].hp=BARRACKS_HP;
-
-    BARRACKS[2].hp=BARRACKS_HP;
-
-
-
-    BARRACKS[1].destroyed=false;
-
-    BARRACKS[2].destroyed=false;
-
-
-
-
-    for(const p of players.values()){
-
-
-        p.hp=PLAYER_HP;
-
-        p.dead=false;
-
-
-        const pos =
-            spawnPosition(
-                p.team
-            );
-
-
-        p.x=pos.x;
-
-        p.y=pos.y;
-
-
-    }
-
-
-
-
-    broadcast({
-
-        type:"reset_lobby"
-
-    });
-
-
-
-    broadcast({
-
-        type:"players_list",
-
-        players:getPlayers()
-
-    });
-
-
-
-}
-
-
-
-
-// ================== SERVER INFO ==================
-
-console.log(
-    "[SERVER] Ready"
-);
