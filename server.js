@@ -1106,3 +1106,494 @@ function handleBarracksDamage(ws,data){
 
 
 }
+// ================= CREEPS =================
+
+
+function startCreeps(){
+
+
+	if(creepTimer)
+		return;
+
+
+	creepTimer=setInterval(()=>{
+
+
+		if(gameState!=="playing")
+			return;
+
+
+
+		spawnCreep(1);
+		spawnCreep(2);
+
+
+
+	},15000);
+
+
+}
+
+
+
+
+
+
+function spawnCreep(team){
+
+
+	const id="creep_"+nextCreepId++;
+
+
+
+	const creep={
+
+
+		id:id,
+
+		team:team,
+
+
+		x:
+		team===1
+		?
+		300
+		:
+		1600,
+
+
+		y:450,
+
+
+		hp:80
+
+
+	};
+
+
+
+	creeps.set(
+		id,
+		creep
+	);
+
+
+
+	broadcast({
+
+		type:"creep_spawn",
+
+		id:id,
+
+		team:team,
+
+		x:creep.x,
+
+		y:creep.y,
+
+		hp:creep.hp
+
+	});
+
+
+}
+
+
+
+
+
+
+
+
+function creepTick(){
+
+
+	for(const [id,c] of creeps){
+
+
+
+		if(c.team===1)
+			c.x+=4;
+		else
+			c.x-=4;
+
+
+
+		broadcast({
+
+			type:"creep_move",
+
+			id:id,
+
+			x:c.x,
+
+			y:c.y
+
+		});
+
+
+
+
+		// дошёл до базы
+
+
+		if(c.team===1 && c.x>=1700){
+
+
+			town2_hp-=10;
+
+
+			broadcast({
+
+				type:"town_damage",
+
+				town_id:2,
+
+				damage:10,
+
+				new_hp:town2_hp
+
+			});
+
+
+			removeCreep(id);
+
+
+		}
+
+
+
+		if(c.team===2 && c.x<=200){
+
+
+			town1_hp-=10;
+
+
+
+			broadcast({
+
+				type:"town_damage",
+
+				town_id:1,
+
+				damage:10,
+
+				new_hp:town1_hp
+
+			});
+
+
+			removeCreep(id);
+
+
+		}
+
+
+	}
+
+
+
+	checkWin();
+
+}
+
+
+
+
+
+
+
+setInterval(
+	creepTick,
+	TICK
+);
+
+
+
+
+
+
+
+
+function handleCreepDamage(ws,data){
+
+
+	const creep=creeps.get(
+		data.id
+	);
+
+
+
+	if(!creep)
+		return;
+
+
+
+	creep.hp-=data.damage || 25;
+
+
+
+	broadcast({
+
+		type:"creep_damage",
+
+		id:creep.id,
+
+		new_hp:creep.hp
+
+	});
+
+
+
+	if(creep.hp<=0){
+
+
+		removeCreep(
+			creep.id
+		);
+
+
+	}
+
+
+
+}
+
+
+
+
+
+
+
+function removeCreep(id){
+
+
+	if(!creeps.has(id))
+		return;
+
+
+
+	creeps.delete(id);
+
+
+
+	broadcast({
+
+		type:"creep_destroy",
+
+		id:id
+
+	});
+
+}
+
+
+
+
+
+
+
+
+
+// ================= WIN =================
+
+
+function checkWin(){
+
+
+	if(
+		town1_hp<=0
+	){
+
+
+		gameOver(2);
+
+
+	}
+
+
+	if(
+		town2_hp<=0
+	){
+
+
+		gameOver(1);
+
+
+	}
+
+
+}
+
+
+
+
+
+
+
+function gameOver(team){
+
+
+	if(gameState==="finished")
+		return;
+
+
+
+	gameState="finished";
+
+
+
+	broadcast({
+
+		type:"game_over",
+
+		winner:team
+
+	});
+
+
+
+	setTimeout(()=>{
+
+
+		resetGame();
+
+
+	},10000);
+
+}
+
+
+
+
+
+
+
+
+
+// ================= REMOVE PLAYER =================
+
+
+function removePlayer(id){
+
+
+	const p=players.get(id);
+
+
+	if(!p)
+		return;
+
+
+
+	console.log(
+		"[SERVER] remove",
+		id
+	);
+
+
+
+	players.delete(id);
+
+
+
+	broadcast({
+
+		type:"player_left",
+
+		id:id
+
+	});
+
+
+
+	if(players.size===0){
+
+
+		resetGame();
+
+
+	}
+
+}
+
+
+
+
+
+
+
+
+
+// ================= RESET =================
+
+
+function resetGame(){
+
+
+	gameState="lobby";
+
+
+
+	town1_hp=TOWN_HP;
+
+	town2_hp=TOWN_HP;
+
+
+	barracks1_hp=BARRACKS_HP;
+
+	barracks2_hp=BARRACKS_HP;
+
+
+
+	barracks1_destroyed=false;
+
+	barracks2_destroyed=false;
+
+
+
+	creeps.clear();
+
+
+
+	for(const p of players.values()){
+
+
+		p.hp=100;
+
+		p.dead=false;
+
+
+		p.x=
+		p.team===1
+		?
+		TEAM1_SPAWN.x
+		:
+		TEAM2_SPAWN.x;
+
+
+		p.y=450;
+
+
+	}
+
+
+
+	broadcast({
+
+		type:"reset_lobby"
+
+	});
+
+
+
+	broadcast({
+
+		type:"players_list",
+
+		players:getPlayers()
+
+	});
+
+
+
+}
