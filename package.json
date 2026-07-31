@@ -1,11 +1,21 @@
 {
-    "name": "game-server",
-    "version": "1.0.0",
-    "scripts": {
-        "start": "node server.js"
-    },
-    "dependencies": {
-        "express": "^4.18.0",
-        "ws": "^8.14.0"
-    }
+  "name": "game-server",
+  "version": "1.0.0",
+  "description": "WebSocket Game Server",
+  "main": "simple_server.js",
+  "scripts": {
+    "start": "node simple_server.js",
+    "dev": "node simple_server.js",
+    "full": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.14.2"
+  },
+  "keywords": [
+    "websocket",
+    "game",
+    "server"
+  ],
+  "author": "",
+  "license": "MIT"
 }
