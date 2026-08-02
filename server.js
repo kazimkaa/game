@@ -1,45 +1,93 @@
+// Подключаем библиотеку WebSocket
 const WebSocket = require('ws');
-const wss = new WebSocket.Server({ port: 8080 });
+// Подключаем модуль HTTP (нужен для работы с render.com)
+const http = require('http');
 
-console.log('WebSocket сервер запущен на порту 8080');
+// Создаем HTTP-сервер
+const server = http.createServer((req, res) => {
+    // Отвечаем на HTTP-запросы (для проверки, что сервер жив)
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('WebSocket сервер работает! Используйте ws:// для подключения.');
+});
 
-// Храним всех игроков
-const players = new Map();
+// Создаем WebSocket-сервер и ПРИКРЕПЛЯЕМ его к HTTP-серверу
+const wss = new WebSocket.Server({ server });
 
-wss.on('connection', (ws) => {
-    console.log('Новый игрок подключился');
+// Определяем порт (render.com задает его через переменную окружения)
+const PORT = process.env.PORT || 8080;
+
+// Запускаем сервер
+server.listen(PORT, () => {
+    console.log(`✅ Сервер запущен на порту ${PORT}`);
+    console.log(`📍 Адрес: ws://localhost:${PORT}`);
+    console.log('🔄 Ожидание WebSocket-подключений...');
+});
+
+// ========== ОБРАБОТЧИКИ СОБЫТИЙ ==========
+
+// Когда кто-то подключается
+wss.on('connection', (ws, req) => {
+    // Получаем IP-адрес клиента
+    const clientIP = req.socket.remoteAddress;
+    console.log(`🔌 НОВОЕ ПОДКЛЮЧЕНИЕ от ${clientIP}`);
+    console.log(`👥 Всего подключено: ${wss.clients.size} клиентов`);
     
-    // Отправляем приветствие
-    ws.send(JSON.stringify({
+    // Отправляем приветственное сообщение
+    const welcomeMessage = JSON.stringify({
         type: 'welcome',
-        message: 'Добро пожаловать на сервер!'
-    }));
-    
+        message: 'Добро пожаловать на игровой сервер!',
+        timestamp: new Date().toISOString()
+    });
+    ws.send(welcomeMessage);
+    console.log(`📤 Отправлено приветствие клиенту ${clientIP}`);
+
+    // Когда получаем сообщение от клиента
     ws.on('message', (message) => {
+        console.log(`📩 Получено сообщение от ${clientIP}: ${message.toString()}`);
+        
         try {
+            // Пробуем распарсить JSON
             const data = JSON.parse(message);
-            console.log('Получено:', data);
+            console.log(`📋 Данные:`, JSON.stringify(data, null, 2));
             
-            // Эхо-ответ (или обработка)
-            ws.send(JSON.stringify({
+            // Отправляем ответ (эхо)
+            const response = JSON.stringify({
                 type: 'echo',
-                received: data
-            }));
-            
-            // Если это авторизация - запоминаем игрока
-            if (data.type === 'auth') {
-                players.set(ws, data.player_name);
-                console.log('Игрок авторизован:', data.player_name);
-            }
+                received: data,
+                timestamp: new Date().toISOString()
+            });
+            ws.send(response);
+            console.log(`📤 Отправлен ответ клиенту ${clientIP}`);
             
         } catch (e) {
-            console.error('Ошибка парсинга:', e);
+            console.log(`⚠️ Ошибка парсинга JSON от ${clientIP}: ${e.message}`);
+            // Отправляем ошибку клиенту
+            ws.send(JSON.stringify({
+                type: 'error',
+                message: 'Неверный формат JSON'
+            }));
         }
     });
-    
+
+    // Когда клиент отключается
     ws.on('close', () => {
-        const name = players.get(ws) || 'Неизвестный';
-        console.log('Игрок отключился:', name);
-        players.delete(ws);
+        console.log(`🔌 ОТКЛЮЧЕНИЕ клиента ${clientIP}`);
+        console.log(`👥 Всего подключено: ${wss.clients.size} клиентов`);
     });
+
+    // Обработка ошибок сокета
+    ws.on('error', (error) => {
+        console.log(`⚠️ Ошибка сокета для ${clientIP}: ${error.message}`);
+    });
+});
+
+// Обработка ошибок сервера
+wss.on('error', (error) => {
+    console.log(`⚠️ Ошибка сервера: ${error.message}`);
+});
+
+// Обработка закрытия сервера
+process.on('SIGINT', () => {
+    console.log('🛑 Сервер остановлен вручную');
+    process.exit();
 });
