@@ -59,6 +59,9 @@ function handleMessage(ws, data) {
         case 'move':
             handleMove(ws, data);
             break;
+        case 'chat':
+            handleChat(ws, data);
+            break;
         case 'ping':
             ws.send(JSON.stringify({ type: 'pong' }));
             break;
@@ -120,6 +123,23 @@ function handleMove(ws, data) {
         y: data.y,
         flip: data.flip
     }, ws);
+}
+
+// ✅ НОВАЯ ФУНКЦИЯ ДЛЯ ЧАТА
+function handleChat(ws, data) {
+    const sender = ws.playerData.nickname || 'Неизвестный';
+    const message = data.message || '';
+    
+    if (!message) return;
+    
+    console.log(`💬 [${sender}]: ${message}`);
+    
+    // ОТПРАВЛЯЕМ ВСЕМ (ВКЛЮЧАЯ ОТПРАВИТЕЛЯ)
+    broadcastToAll({
+        type: 'chat',
+        sender: sender,
+        message: message
+    });
 }
 
 function broadcastToAll(message, exclude = null) {
