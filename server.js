@@ -123,6 +123,9 @@ function handleMessage(ws, data) {
         case 'respawn':
             handleRespawn(ws, data);
             break;
+        case 'force_start':  // ← ДОБАВЛЕНО
+            handleForceStart(ws, data);
+            break;
         default:
             console.log(`⚠️ Неизвестный тип: ${type}`);
     }
@@ -219,12 +222,10 @@ function handleLevelReady(ws, data) {
     console.log(`📊 Всего игроков: ${players.size}`);
     console.log(`📊 Готовых игроков: ${getReadyPlayers()}`);
     
-    // ПРОВЕРЯЕМ КАЖДОГО ИГРОКА
     players.forEach((p, id) => {
         console.log(`   - ${p.nickname}: ${p.inGame ? '✅ ГОТОВ' : '❌ НЕ ГОТОВ'}`);
     });
     
-    // Если все игроки готовы, запускаем игру
     checkAllReady();
 }
 
@@ -245,7 +246,6 @@ function handlePlayerDamage(ws, data) {
             target_id: targetId,
             new_hp: 0
         });
-        // Респавн через 3 секунды
         setTimeout(() => {
             respawnPlayer(targetId);
         }, 3000);
@@ -266,7 +266,7 @@ function handleTownDamage(ws, data) {
         gameState.blueTowerHp -= damage;
         if (gameState.blueTowerHp <= 0) {
             gameState.blueTowerHp = 0;
-            endGame(2); // Красные победили
+            endGame(2);
         }
         broadcastToAll({
             type: 'town_damage',
@@ -278,7 +278,7 @@ function handleTownDamage(ws, data) {
         gameState.redTowerHp -= damage;
         if (gameState.redTowerHp <= 0) {
             gameState.redTowerHp = 0;
-            endGame(1); // Синие победили
+            endGame(1);
         }
         broadcastToAll({
             type: 'town_damage',
@@ -465,7 +465,6 @@ function startGame() {
     gameState.blueBarracksDestroyed = false;
     gameState.redBarracksDestroyed = false;
     
-    // Собираем данные игроков
     const playersData = {};
     players.forEach((p, id) => {
         playersData[id] = {
@@ -496,20 +495,57 @@ function startGame() {
     
     console.log('🎮 ИГРА НАЧАЛАСЬ!');
     
-    // Запускаем таймер игры
     if (gameTimerInterval) {
         clearInterval(gameTimerInterval);
     }
     gameTimerInterval = setInterval(() => {
         gameState.timer--;
         if (gameState.timer <= 0) {
-            endGame(0); // Ничья
+            endGame(0);
         }
     }, 1000);
 }
 
 // ============================================
-// 8. ЗАВЕРШЕНИЕ ИГРЫ
+// 8. ПРИНУДИТЕЛЬНЫЙ ЗАПУСК (F2)
+// ============================================
+
+function handleForceStart(ws, data) {
+    console.log(`🔥 ПРИНУДИТЕЛЬНЫЙ ЗАПУСК ОТ ${ws.playerData.nickname}`);
+    
+    if (players.size < 2) {
+        ws.send(JSON.stringify({ 
+            type: 'chat', 
+            sender: '🛠️ [СИСТЕМА]', 
+            message: '❌ Нужно минимум 2 игрока для запуска!' 
+        }));
+        return;
+    }
+    
+    // Принудительно делаем всех готовыми
+    players.forEach((p) => {
+        p.inGame = true;
+    });
+    
+    console.log(`🔥 ПРИНУДИТЕЛЬНЫЙ ЗАПУСК! Все игроки готовы`);
+    
+    broadcastToAll({
+        type: 'chat',
+        sender: '🛠️ [СИСТЕМА]',
+        message: '🔥 ПРИНУДИТЕЛЬНЫЙ ЗАПУСК ИГРЫ!'
+    });
+    
+    // Отменяем текущий отсчёт, если есть
+    if (countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+    }
+    
+    startCountdown();
+}
+
+// ============================================
+// 9. ЗАВЕРШЕНИЕ ИГРЫ
 // ============================================
 
 function endGame(winnerTeam) {
@@ -535,7 +571,6 @@ function endGame(winnerTeam) {
         winner_team: winnerTeam
     });
     
-    // Через 5 секунд возвращаем в лобби
     setTimeout(() => {
         resetGame();
     }, 5000);
@@ -553,7 +588,6 @@ function resetGame() {
     gameState.redBarracksDestroyed = false;
     gameState.winner = 0;
     
-    // Сбрасываем игроков
     players.forEach((p) => {
         p.inGame = false;
         p.hp = 100;
@@ -571,7 +605,7 @@ function resetGame() {
 }
 
 // ============================================
-// 9. ОТКЛЮЧЕНИЕ ИГРОКА
+// 10. ОТКЛЮЧЕНИЕ ИГРОКА
 // ============================================
 
 function handleDisconnect(ws) {
@@ -589,14 +623,13 @@ function handleDisconnect(ws) {
     
     console.log(`❌ Отключился: ${nickname}`);
     
-    // Если игроков меньше 2, отменяем обратный отсчёт
     if (players.size < 2) {
         cancelCountdown();
     }
 }
 
 // ============================================
-// 10. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+// 11. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ============================================
 
 function broadcastToAll(message, exclude = null) {
@@ -630,7 +663,7 @@ function broadcastPlayerList() {
 }
 
 // ============================================
-// 11. ОБРАБОТКА ОСТАНОВКИ СЕРВЕРА
+// 12. ОБРАБОТКА ОСТАНОВКИ СЕРВЕРА
 // ============================================
 
 process.on('SIGINT', () => {
