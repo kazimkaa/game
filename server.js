@@ -69,6 +69,7 @@ wss.on('connection', (ws, req) => {
     ws.on('message', (raw) => {
         try {
             const data = JSON.parse(raw);
+            console.log(`📩 [${ws.playerData.nickname || '???'}] Получено:`, data.type);
             handleMessage(ws, data);
         } catch (e) {
             console.log(`⚠️ Ошибка: ${e.message}`);
@@ -138,6 +139,8 @@ function handleJoin(ws, data) {
     const x = data.x || 0;
     const y = data.y || 0;
     
+    console.log(`📥 JOIN от ${nickname} (${id})`);
+    
     if (players.has(id)) {
         ws.send(JSON.stringify({ type: 'error', message: 'ID занят' }));
         return;
@@ -153,6 +156,7 @@ function handleJoin(ws, data) {
     players.set(id, ws.playerData);
     
     console.log(`👤 Игрок: ${nickname} (${id}) команда ${ws.playerData.team}`);
+    console.log(`📊 Всего игроков: ${players.size}`);
     
     ws.send(JSON.stringify({
         type: 'join_success',
@@ -211,7 +215,14 @@ function handleChat(ws, data) {
 
 function handleLevelReady(ws, data) {
     ws.playerData.inGame = true;
-    console.log(`🎮 ${ws.playerData.nickname} готов к игре`);
+    console.log(`🎮 ${ws.playerData.nickname} ГОТОВ К ИГРЕ!`);
+    console.log(`📊 Всего игроков: ${players.size}`);
+    console.log(`📊 Готовых игроков: ${getReadyPlayers()}`);
+    
+    // ПРОВЕРЯЕМ КАЖДОГО ИГРОКА
+    players.forEach((p, id) => {
+        console.log(`   - ${p.nickname}: ${p.inGame ? '✅ ГОТОВ' : '❌ НЕ ГОТОВ'}`);
+    });
     
     // Если все игроки готовы, запускаем игру
     checkAllReady();
@@ -354,12 +365,19 @@ function respawnPlayer(id) {
 // ============================================
 
 function checkCountdown() {
-    if (gameState.status !== 'lobby') return;
+    if (gameState.status !== 'lobby') {
+        console.log(`⏳ Статус не lobby: ${gameState.status}`);
+        return;
+    }
     
     const readyPlayers = getReadyPlayers();
+    console.log(`🔍 checkCountdown: готовых=${readyPlayers}, всего=${players.size}`);
+    
     if (readyPlayers >= 2) {
+        console.log(`✅ ЗАПУСКАЕМ ОБРАТНЫЙ ОТСЧЁТ!`);
         startCountdown();
     } else {
+        console.log(`⏳ Ждём ещё игроков (готово ${readyPlayers})`);
         cancelCountdown();
     }
 }
@@ -373,19 +391,33 @@ function getReadyPlayers() {
 }
 
 function checkAllReady() {
-    if (gameState.status === 'playing') return;
+    if (gameState.status === 'playing' || gameState.status === 'finished') {
+        console.log(`⏳ Игра уже ${gameState.status}, пропускаем`);
+        return;
+    }
     
     const totalPlayers = players.size;
     const readyPlayers = getReadyPlayers();
     
+    console.log(`🔍 ПРОВЕРКА ЗАПУСКА: всего=${totalPlayers}, готово=${readyPlayers}`);
+    console.log(`   - totalPlayers >= 2: ${totalPlayers >= 2}`);
+    console.log(`   - readyPlayers === totalPlayers: ${readyPlayers === totalPlayers}`);
+    
     if (totalPlayers >= 2 && readyPlayers === totalPlayers) {
+        console.log(`✅ УСЛОВИЕ ВЫПОЛНЕНО! Запускаем игру...`);
         startCountdown();
+    } else {
+        console.log(`⏳ Условие НЕ выполнено`);
     }
 }
 
 function startCountdown() {
-    if (countdownInterval) return;
+    if (countdownInterval) {
+        console.log(`⏳ Отсчёт уже идёт`);
+        return;
+    }
     
+    console.log(`⏱️ ЗАПУСК ОБРАТНОГО ОТСЧЁТА!`);
     gameState.status = 'countdown';
     gameState.countdown = 15;
     
@@ -396,12 +428,14 @@ function startCountdown() {
     
     countdownInterval = setInterval(() => {
         gameState.countdown--;
+        console.log(`⏱️ Обратный отсчёт: ${gameState.countdown}`);
         broadcastToAll({
             type: 'countdown_update',
             time: gameState.countdown
         });
         
         if (gameState.countdown <= 0) {
+            console.log(`🚀 ОТСЧЁТ ЗАКОНЧЕН! ЗАПУСКАЕМ ИГРУ!`);
             clearInterval(countdownInterval);
             countdownInterval = null;
             startGame();
@@ -417,6 +451,7 @@ function cancelCountdown() {
         broadcastToAll({
             type: 'countdown_cancel'
         });
+        console.log(`⏸ Обратный отсчёт ОТМЕНЁН`);
     }
 }
 
@@ -446,7 +481,7 @@ function startGame() {
     broadcastToAll({
         type: 'init_game',
         players: playersData,
-        my_team: 0, // Каждый получит свою команду отдельно
+        my_team: 0,
         town1_hp: gameState.blueTowerHp,
         town2_hp: gameState.redTowerHp,
         barracks1_hp: gameState.blueBarracksHp,
