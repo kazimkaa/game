@@ -34,6 +34,7 @@ const gameState = {
 
 let countdownInterval = null;
 let gameTimerInterval = null;
+let playerCheckInterval = null;  // <--- ДОБАВЛЕНО
 
 // ============================================
 // 3. ЗАПУСК СЕРВЕРА
@@ -123,7 +124,7 @@ function handleMessage(ws, data) {
         case 'respawn':
             handleRespawn(ws, data);
             break;
-        case 'force_start':  // ← ДОБАВЛЕНО
+        case 'force_start':
             handleForceStart(ws, data);
             break;
         default:
@@ -390,6 +391,14 @@ function getReadyPlayers() {
     return count;
 }
 
+function getAlivePlayers() {  // <--- НОВАЯ ФУНКЦИЯ
+    let count = 0;
+    players.forEach((p) => {
+        if (!p.isDead) count++;
+    });
+    return count;
+}
+
 function checkAllReady() {
     if (gameState.status === 'playing' || gameState.status === 'finished') {
         console.log(`⏳ Игра уже ${gameState.status}, пропускаем`);
@@ -504,6 +513,83 @@ function startGame() {
             endGame(0);
         }
     }, 1000);
+    
+    // ============================================
+    // ЗАПУСКАЕМ ПРОВЕРКУ ИГРОКОВ КАЖДЫЕ 3 СЕКУНДЫ
+    // ============================================
+    if (playerCheckInterval) {
+        clearInterval(playerCheckInterval);
+    }
+    playerCheckInterval = setInterval(() => {
+        checkPlayersCount();
+    }, 3000);
+}
+
+// ============================================
+// 7.1. ПРОВЕРКА КОЛИЧЕСТВА ИГРОКОВ
+// ============================================
+
+function checkPlayersCount() {
+    if (gameState.status !== 'playing') return;
+    
+    const alivePlayers = getAlivePlayers();
+    const totalPlayers = players.size;
+    
+    console.log(`👥 Проверка игроков: живых=${alivePlayers}, всего=${totalPlayers}`);
+    
+    // ЕСЛИ В ИГРЕ МЕНЬШЕ 2 ИГРОКОВ - ЗАКАНЧИВАЕМ
+    if (totalPlayers < 2) {
+        console.log(`⚠️ В игре меньше 2 игроков (${totalPlayers})! Завершаем игру...`);
+        
+        broadcastToAll({
+            type: 'chat',
+            sender: '🛠️ [СИСТЕМА]',
+            message: `⚠️ Игра завершена! Недостаточно игроков (${totalPlayers})`
+        });
+        
+        // Определяем победителя
+        let winner = 0;
+        if (totalPlayers === 1) {
+            // Если остался 1 игрок - он победитель
+            players.forEach((p) => {
+                winner = p.team;
+            });
+        }
+        
+        endGame(winner);
+        return;
+    }
+    
+    // ЕСЛИ В КОМАНДЕ НЕТ ИГРОКОВ - ДРУГАЯ КОМАНДА ПОБЕЖДАЕТ
+    let hasBlue = false;
+    let hasRed = false;
+    
+    players.forEach((p) => {
+        if (p.team === 1 && !p.isDead) hasBlue = true;
+        if (p.team === 2 && !p.isDead) hasRed = true;
+    });
+    
+    if (!hasBlue && hasRed) {
+        console.log(`🔵 Синяя команда не имеет живых игроков! Побеждает красная!`);
+        broadcastToAll({
+            type: 'chat',
+            sender: '🛠️ [СИСТЕМА]',
+            message: '🔴 Все игроки синей команды мертвы! Побеждает красная команда!'
+        });
+        endGame(2);
+        return;
+    }
+    
+    if (!hasRed && hasBlue) {
+        console.log(`🔴 Красная команда не имеет живых игроков! Побеждает синяя!`);
+        broadcastToAll({
+            type: 'chat',
+            sender: '🛠️ [СИСТЕМА]',
+            message: '🔵 Все игроки красной команды мертвы! Побеждает синяя команда!'
+        });
+        endGame(1);
+        return;
+    }
 }
 
 // ============================================
@@ -562,9 +648,19 @@ function endGame(winnerTeam) {
         clearInterval(countdownInterval);
         countdownInterval = null;
     }
+    if (playerCheckInterval) {  // <--- ДОБАВЛЕНО
+        clearInterval(playerCheckInterval);
+        playerCheckInterval = null;
+    }
     
     const winnerText = winnerTeam === 0 ? 'НИЧЬЯ!' : `Команда ${winnerTeam} ПОБЕДИЛА!`;
     console.log(`🏆 ${winnerText}`);
+    
+    broadcastToAll({
+        type: 'chat',
+        sender: '🛠️ [СИСТЕМА]',
+        message: `🏆 ${winnerText}`
+    });
     
     broadcastToAll({
         type: 'game_over',
@@ -619,11 +715,23 @@ function handleDisconnect(ws) {
             type: 'player_left',
             id: id
         });
+        
+        // ЕСЛИ ИГРА В ПРОЦЕССЕ - ПРОВЕРЯЕМ КОЛИЧЕСТВО ИГРОКОВ
+        if (gameState.status === 'playing') {
+            console.log(`⚠️ Игрок ${nickname} вышел во время игры!`);
+            broadcastToAll({
+                type: 'chat',
+                sender: '🛠️ [СИСТЕМА]',
+                message: `⚠️ Игрок ${nickname} покинул игру!`
+            });
+            // Проверяем количество игроков сразу
+            checkPlayersCount();
+        }
     }
     
     console.log(`❌ Отключился: ${nickname}`);
     
-    if (players.size < 2) {
+    if (players.size < 2 && gameState.status !== 'playing') {
         cancelCountdown();
     }
 }
@@ -670,5 +778,6 @@ process.on('SIGINT', () => {
     console.log('🛑 Сервер остановлен');
     if (countdownInterval) clearInterval(countdownInterval);
     if (gameTimerInterval) clearInterval(gameTimerInterval);
+    if (playerCheckInterval) clearInterval(playerCheckInterval);
     process.exit();
 });
