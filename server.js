@@ -34,7 +34,7 @@ const gameState = {
 
 let countdownInterval = null;
 let gameTimerInterval = null;
-let playerCheckInterval = null;  // <--- ДОБАВЛЕНО
+let playerCheckInterval = null;
 
 // ============================================
 // 3. ЗАПУСК СЕРВЕРА
@@ -155,7 +155,33 @@ function handleJoin(ws, data) {
     ws.playerData.character = character;
     ws.playerData.x = x;
     ws.playerData.y = y;
-    ws.playerData.team = players.size % 2 === 0 ? 1 : 2;
+    
+    // ============================================
+    // ПРАВИЛЬНОЕ НАЗНАЧЕНИЕ КОМАНД
+    // ============================================
+    let blueCount = 0;
+    let redCount = 0;
+    players.forEach((p) => {
+        if (p.team === 1) blueCount++;
+        if (p.team === 2) redCount++;
+    });
+    
+    // НАЗНАЧАЕМ В КОМАНДУ С МЕНЬШИМ КОЛИЧЕСТВОМ
+    if (players.size === 0) {
+        ws.playerData.team = 1;
+        console.log(`🔵 ${nickname} назначен в синюю команду (первый игрок)`);
+    } else if (players.size === 1) {
+        ws.playerData.team = 2;
+        console.log(`🔴 ${nickname} назначен в красную команду (второй игрок)`);
+    } else {
+        if (blueCount <= redCount) {
+            ws.playerData.team = 1;
+            console.log(`🔵 ${nickname} назначен в синюю команду (${blueCount} синих, ${redCount} красных)`);
+        } else {
+            ws.playerData.team = 2;
+            console.log(`🔴 ${nickname} назначен в красную команду (${blueCount} синих, ${redCount} красных)`);
+        }
+    }
     
     players.set(id, ws.playerData);
     
@@ -180,8 +206,6 @@ function handleJoin(ws, data) {
     });
     
     broadcastPlayerList();
-    
-    // Проверяем, можно ли начать обратный отсчёт
     checkCountdown();
 }
 
@@ -391,7 +415,7 @@ function getReadyPlayers() {
     return count;
 }
 
-function getAlivePlayers() {  // <--- НОВАЯ ФУНКЦИЯ
+function getAlivePlayers() {
     let count = 0;
     players.forEach((p) => {
         if (!p.isDead) count++;
@@ -474,28 +498,42 @@ function startGame() {
     gameState.blueBarracksDestroyed = false;
     gameState.redBarracksDestroyed = false;
     
-    const playersData = {};
-    players.forEach((p, id) => {
-        playersData[id] = {
-            nickname: p.nickname,
-            character: p.character,
-            x: p.x,
-            y: p.y,
-            team: p.team,
-            hp: p.hp
-        };
-    });
-    
-    broadcastToAll({
-        type: 'init_game',
-        players: playersData,
-        my_team: 0,
-        town1_hp: gameState.blueTowerHp,
-        town2_hp: gameState.redTowerHp,
-        barracks1_hp: gameState.blueBarracksHp,
-        barracks2_hp: gameState.redBarracksHp,
-        barracks1_destroyed: gameState.blueBarracksDestroyed,
-        barracks2_destroyed: gameState.redBarracksDestroyed
+    // ============================================
+    // ОТПРАВЛЯЕМ КАЖДОМУ ИГРОКУ ЕГО КОМАНДУ
+    // ============================================
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN && client.playerData && client.playerData.id) {
+            const pid = client.playerData.id;
+            const pData = players.get(pid);
+            
+            if (pData) {
+                const playersData = {};
+                players.forEach((p, id) => {
+                    playersData[id] = {
+                        nickname: p.nickname,
+                        character: p.character,
+                        x: p.x,
+                        y: p.y,
+                        team: p.team,
+                        hp: p.hp
+                    };
+                });
+                
+                client.send(JSON.stringify({
+                    type: 'init_game',
+                    players: playersData,
+                    my_team: pData.team,  // <--- ПРАВИЛЬНАЯ КОМАНДА ДЛЯ ЭТОГО ИГРОКА
+                    town1_hp: gameState.blueTowerHp,
+                    town2_hp: gameState.redTowerHp,
+                    barracks1_hp: gameState.blueBarracksHp,
+                    barracks2_hp: gameState.redBarracksHp,
+                    barracks1_destroyed: gameState.blueBarracksDestroyed,
+                    barracks2_destroyed: gameState.redBarracksDestroyed
+                }));
+                
+                console.log(`📤 Отправлен init_game игроку ${pData.nickname} (команда ${pData.team})`);
+            }
+        }
     });
     
     broadcastToAll({
@@ -514,9 +552,6 @@ function startGame() {
         }
     }, 1000);
     
-    // ============================================
-    // ЗАПУСКАЕМ ПРОВЕРКУ ИГРОКОВ КАЖДЫЕ 3 СЕКУНДЫ
-    // ============================================
     if (playerCheckInterval) {
         clearInterval(playerCheckInterval);
     }
@@ -537,7 +572,6 @@ function checkPlayersCount() {
     
     console.log(`👥 Проверка игроков: живых=${alivePlayers}, всего=${totalPlayers}`);
     
-    // ЕСЛИ В ИГРЕ МЕНЬШЕ 2 ИГРОКОВ - ЗАКАНЧИВАЕМ
     if (totalPlayers < 2) {
         console.log(`⚠️ В игре меньше 2 игроков (${totalPlayers})! Завершаем игру...`);
         
@@ -547,10 +581,8 @@ function checkPlayersCount() {
             message: `⚠️ Игра завершена! Недостаточно игроков (${totalPlayers})`
         });
         
-        // Определяем победителя
         let winner = 0;
         if (totalPlayers === 1) {
-            // Если остался 1 игрок - он победитель
             players.forEach((p) => {
                 winner = p.team;
             });
@@ -560,7 +592,6 @@ function checkPlayersCount() {
         return;
     }
     
-    // ЕСЛИ В КОМАНДЕ НЕТ ИГРОКОВ - ДРУГАЯ КОМАНДА ПОБЕЖДАЕТ
     let hasBlue = false;
     let hasRed = false;
     
@@ -608,7 +639,6 @@ function handleForceStart(ws, data) {
         return;
     }
     
-    // Принудительно делаем всех готовыми
     players.forEach((p) => {
         p.inGame = true;
     });
@@ -621,7 +651,6 @@ function handleForceStart(ws, data) {
         message: '🔥 ПРИНУДИТЕЛЬНЫЙ ЗАПУСК ИГРЫ!'
     });
     
-    // Отменяем текущий отсчёт, если есть
     if (countdownInterval) {
         clearInterval(countdownInterval);
         countdownInterval = null;
@@ -648,7 +677,7 @@ function endGame(winnerTeam) {
         clearInterval(countdownInterval);
         countdownInterval = null;
     }
-    if (playerCheckInterval) {  // <--- ДОБАВЛЕНО
+    if (playerCheckInterval) {
         clearInterval(playerCheckInterval);
         playerCheckInterval = null;
     }
@@ -716,7 +745,6 @@ function handleDisconnect(ws) {
             id: id
         });
         
-        // ЕСЛИ ИГРА В ПРОЦЕССЕ - ПРОВЕРЯЕМ КОЛИЧЕСТВО ИГРОКОВ
         if (gameState.status === 'playing') {
             console.log(`⚠️ Игрок ${nickname} вышел во время игры!`);
             broadcastToAll({
@@ -724,7 +752,6 @@ function handleDisconnect(ws) {
                 sender: '🛠️ [СИСТЕМА]',
                 message: `⚠️ Игрок ${nickname} покинул игру!`
             });
-            // Проверяем количество игроков сразу
             checkPlayersCount();
         }
     }
