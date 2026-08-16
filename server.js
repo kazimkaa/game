@@ -4,7 +4,7 @@ const WebSocket = require('ws');
 const PORT = process.env.PORT || 3000;
 const players = new Map();
 const state = {};
-let countdownTimer = null, gameTimer = null, playerCheckTimer = null;
+let countdownTimer = null, gameTimer = null, playerCheckTimer = null, creepTimer = null;
 
 function resetState() {
   Object.assign(state, {
@@ -12,7 +12,7 @@ function resetState() {
     blueTowerHp: 1000, redTowerHp: 1000,
     blueBarracksHp: 100, redBarracksHp: 100,
     blueBarracksDestroyed: false, redBarracksDestroyed: false,
-    creeps: []
+    creeps: [], nextCreepTeam: 1, nextCreepId: 1
   });
 }
 resetState();
@@ -127,6 +127,17 @@ function startGame() {
   clearInterval(gameTimer); clearInterval(playerCheckTimer);
   gameTimer = setInterval(() => { if (--state.timer <= 0) endGame(0); }, 1000);
   playerCheckTimer = setInterval(checkPlayers, 3000);
+  clearInterval(creepTimer);
+  creepTimer = setInterval(spawnCreep, 5000); // Один крип каждые 5 секунд.
+}
+
+function spawnCreep() {
+  if (state.status !== 'playing') return;
+  const team = state.nextCreepTeam;
+  state.nextCreepTeam = team === 1 ? 2 : 1;
+  const creep = { id: `creep_${state.nextCreepId++}`, team, hp: 80, x: team === 1 ? -1400 : 2590, y: 450 };
+  state.creeps.push(creep);
+  broadcast({ type: 'creep_spawn', creep });
 }
 
 function playerDamage(_, data) {
@@ -156,7 +167,15 @@ function barracksDamage(_, data) {
   broadcast({ type: 'barracks_damage', barracks_id: blue ? 1 : 2, new_hp: state[hpKey] });
 }
 function creepDamage(_, data) {
-  if (state.status === 'playing') broadcast({ type: 'creep_damage', id: String(data.id || ''), new_hp: Number(data.new_hp) || 0 });
+  if (state.status !== 'playing') return;
+  const creep = state.creeps.find(item => item.id === String(data.id || ''));
+  if (!creep) return;
+  creep.hp = Math.max(0, creep.hp - Math.max(0, Number(data.damage) || 10));
+  broadcast({ type: 'creep_damage', id: creep.id, new_hp: creep.hp });
+  if (!creep.hp) {
+    state.creeps = state.creeps.filter(item => item !== creep);
+    broadcast({ type: 'creep_destroy', id: creep.id });
+  }
 }
 
 function checkPlayers() {
@@ -168,7 +187,8 @@ function checkPlayers() {
 function endGame(winner) {
   if (state.status !== 'playing') return;
   state.status = 'finished'; state.winner = winner;
-  clearInterval(gameTimer); clearInterval(playerCheckTimer); gameTimer = playerCheckTimer = null;
+  clearInterval(gameTimer); clearInterval(playerCheckTimer); clearInterval(creepTimer);
+  gameTimer = playerCheckTimer = creepTimer = null;
   broadcast({ type: 'game_over', winner_team: winner });
   broadcast({ type: 'game_end', winner }); // Совместимость с текущим Net.gd.
   setTimeout(resetGame, 5000);
@@ -185,4 +205,4 @@ function disconnect(ws) {
   if (state.status === 'countdown' && players.size < 2) cancelCountdown();
   if (state.status === 'playing') checkPlayers();
 }
-process.on('SIGINT', () => { clearInterval(countdownTimer); clearInterval(gameTimer); clearInterval(playerCheckTimer); process.exit(0); });
+process.on('SIGINT', () => { clearInterval(countdownTimer); clearInterval(gameTimer); clearInterval(playerCheckTimer); clearInterval(creepTimer); pr
