@@ -10,7 +10,7 @@ function resetState() {
   Object.assign(state, {
     status: 'lobby', countdown: 15, timer: 300, winner: 0,
     blueTowerHp: 1000, redTowerHp: 1000,
-    blueBarracksHp: 100, redBarracksHp: 100,
+    blueBarracksHp: 500, redBarracksHp: 500,
     blueBarracksDestroyed: false, redBarracksDestroyed: false,
     creeps: [], nextCreepTeam: 1, nextCreepId: 1
   });
@@ -207,4 +207,4 @@ function disconnect(ws) {
   if (state.status === 'countdown' && players.size < 2) cancelCountdown();
   if (state.status === 'playing') checkPlayers();
 }
-process.on('SIGINT', () => { clearInterval(countdownTimer); clearInterval(gameTimer); clearInterval(playerCheckTimer); clearInterval(creepTimer); process.exit(0); })
+process.on('SIGINT', () => { clearInterval(countdownTimer); clearInterval(gameTimer); clearInterval(playerCheckTimer); clearInterval(creepTimer); process.exit(0); });
