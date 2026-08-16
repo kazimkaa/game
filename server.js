@@ -1,4 +1,68 @@
-const blue = [...players.values()].filter(p => p.team === 1).length;
+const http = require('http');
+const WebSocket = require('ws');
+
+const PORT = process.env.PORT || 3000;
+const players = new Map();
+const state = {};
+let countdownTimer = null, gameTimer = null, playerCheckTimer = null;
+
+function resetState() {
+  Object.assign(state, {
+    status: 'lobby', countdown: 15, timer: 300, winner: 0,
+    blueTowerHp: 1000, redTowerHp: 1000,
+    blueBarracksHp: 100, redBarracksHp: 100,
+    blueBarracksDestroyed: false, redBarracksDestroyed: false,
+    creeps: []
+  });
+}
+resetState();
+
+const server = http.createServer((_, res) => res.end('WebSocket game server'));
+const wss = new WebSocket.Server({ server });
+server.listen(PORT, () => console.log(`Game server: ws://0.0.0.0:${PORT}`));
+
+const open = ws => ws && ws.readyState === WebSocket.OPEN;
+const send = (ws, message) => { if (open(ws)) ws.send(JSON.stringify(message)); };
+function broadcast(message, exclude = null) {
+  const json = JSON.stringify(message);
+  wss.clients.forEach(ws => { if (ws !== exclude && open(ws)) ws.send(json); });
+}
+function spawn(team, respawn = false) { return { x: team === 1 ? -1500 : 2690, y: respawn ? 450 : 500 }; }
+function playersObject() {
+  return Object.fromEntries([...players].map(([id, p]) => [id, {
+    nickname: p.nickname, character: p.character, x: p.x, y: p.y,
+    flip: p.flip, team: p.team, hp: p.hp, isDead: p.isDead
+  }]));
+}
+function sendPlayerList(ws) { send(ws, { type: 'players_list', players: playersObject() }); }
+function broadcastPlayerList() { broadcast({ type: 'players_list', players: playersObject() }); }
+function readyCount() { return [...players.values()].filter(p => p.inGame).length; }
+
+wss.on('connection', ws => {
+  ws.playerData = { id: '', nickname: 'Player', character: 1, x: 0, y: 500, flip: false, team: 0, hp: 100, isDead: false, inGame: false };
+  ws.on('message', raw => {
+    try { route(ws, JSON.parse(raw.toString())); }
+    catch { send(ws, { type: 'error', message: 'Некорректный JSON' }); }
+  });
+  ws.on('close', () => disconnect(ws));
+  ws.on('error', () => {});
+});
+
+function route(ws, data) {
+  const handlers = {
+    join, move, chat, level_ready, force_start,
+    player_damage: playerDamage, town_damage: towerDamage,
+    barracks_damage: barracksDamage, creep_damage: creepDamage,
+    respawn: (_, data) => respawn(data.id)
+  };
+  if (data?.type === 'ping') return send(ws, { type: 'pong' });
+  if (handlers[data?.type]) handlers[data.type](ws, data);
+}
+
+function join(ws, data) {
+  const id = String(data.id || '');
+  if (!id || players.has(id)) return send(ws, { type: 'error', message: id ? 'ID занят' : 'ID отсутствует' });
+  const blue = [...players.values()].filter(p => p.team === 1).length;
   const team = blue <= players.size - blue ? 1 : 2;
   Object.assign(ws.playerData, { id, nickname: String(data.nickname || 'Player').slice(0, 32), character: Number(data.character) === 2 ? 2 : 1, team, ...spawn(team) });
   players.set(id, ws.playerData);
@@ -121,4 +185,4 @@ function disconnect(ws) {
   if (state.status === 'countdown' && players.size < 2) cancelCountdown();
   if (state.status === 'playing') checkPlayers();
 }
-process.on('SIGINT', () => { clearInterval(c
+process.on('SIGINT', () => { clearInterval(countdownTimer); clearInterval(gameTimer); clearInterval(playerCheckTimer); process.e
