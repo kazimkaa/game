@@ -181,8 +181,8 @@ function creepDamage(_, data) {
 function checkPlayers() {
   if (state.status !== 'playing') return;
   if (players.size < 2) return endGame(players.size ? [...players.values()][0].team : 0);
-  const teams = new Set([...players.values()].filter(p => !p.isDead).map(p => p.team));
-  if (teams.size === 1) endGame([...teams][0]);
+  // Смерть временная: сервер сделает respawn через 3 секунды.
+  // Матч не должен завершаться, пока игрок просто мёртв.
 }
 function endGame(winner) {
   if (state.status !== 'playing') return;
