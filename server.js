@@ -185,4 +185,4 @@ function disconnect(ws) {
   if (state.status === 'countdown' && players.size < 2) cancelCountdown();
   if (state.status === 'playing') checkPlayers();
 }
-process.on('SIGINT', () => { clearInterval(countdownTimer); clearInterval(gameTimer); clearInterval(playerCheckTimer); process.e
+process.on('SIGINT', () => { clearInterval(countdownTimer); clearInterval(gameTimer); clearInterval(playerCheckTimer); process.exit(0); });
