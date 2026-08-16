@@ -189,6 +189,8 @@ function endGame(winner) {
   state.status = 'finished'; state.winner = winner;
   clearInterval(gameTimer); clearInterval(playerCheckTimer); clearInterval(creepTimer);
   gameTimer = playerCheckTimer = creepTimer = null;
+  const result = winner === 0 ? 'НИЧЬЯ!' : `ПОБЕДА КОМАНДЫ ${winner}!`;
+  broadcast({ type: 'chat', sender: 'СИСТЕМА', message: result });
   broadcast({ type: 'game_over', winner_team: winner });
   broadcast({ type: 'game_end', winner }); // Совместимость с текущим Net.gd.
   setTimeout(resetGame, 5000);
@@ -205,4 +207,4 @@ function disconnect(ws) {
   if (state.status === 'countdown' && players.size < 2) cancelCountdown();
   if (state.status === 'playing') checkPlayers();
 }
-process.on('SIGINT', () => { clearInterval(countdownTimer); clearInterval(gameTimer); clearInterval(playerCheckTimer); clearInterval(creepTimer); pr
+process.on('SIGINT', () => { clearInterval(countdownTimer); clearInterval(gameTimer); clearInterval(playerCheckTimer); clearInterval(creepTimer); process.exit(0); })
