@@ -2,24 +2,78 @@ const http = require('http');
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 3000;
+
 const players = new Map();
 const state = {};
-let countdownTimer = null, gameTimer = null, playerCheckTimer = null, creepTimer = null;
 
-function resetState() {
-  Object.assign(state, {
-    status: 'lobby', countdown: 15, timer: 300, winner: 0,
-    blueTowerHp: 1000, redTowerHp: 1000,
-    blueBarracksHp: 500, redBarracksHp: 500,
-    blueBarracksDestroyed: false, redBarracksDestroyed: false,
-    creeps: [], nextCreepTeam: 1, nextCreepId: 1
+let countdownTimer = null;
+let gameTimer = null;
+let playerCheckTimer = null;
+let creepTimer = null;
+
+// ============================================================
+// HTTP SERVER
+// ============================================================
+
+const server = http.createServer((req, res) => {
+
+  // Render health check
+  if (req.url === '/health') {
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; charset=utf-8'
+    });
+
+    res.end('OK');
+    return;
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/plain; charset=utf-8'
   });
-}
-resetState();
 
-const server = http.createServer((_, res) => res.end('WebSocket game server'));
-const wss = new WebSocket.Server({ server });
-server.listen(PORT, () => console.log(`Game server: ws://0.0.0.0:${PORT}`));
+  res.end('WebSocket game server');
+});
+
+
+// ============================================================
+// WEBSOCKET
+// ============================================================
+
+const wss = new WebSocket.Server({
+  server: server
+});
+
+
+// ============================================================
+// START
+// ============================================================
+
+server.listen(PORT, '0.0.0.0', () => {
+
+  console.log(
+    `Game server started on port ${PORT}`
+  );
+
+});
+
+
+// ============================================================
+// KEEP ALIVE
+// ============================================================
+//
+// ВАЖНО:
+// Это не даёт Node.js-процессу простаивать.
+// Render всё равно может усыплять бесплатный сервис,
+// но пока сервис работает, он постоянно активен.
+// ============================================================
+
+setInterval(() => {
+
+  console.log(
+    `[SERVER] alive | players: ${players.size} | status: ${state.status}`
+  );
+
+}, 30000);
 
 const open = ws => ws && ws.readyState === WebSocket.OPEN;
 const send = (ws, message) => { if (open(ws)) ws.send(JSON.stringify(message)); };
