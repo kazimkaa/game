@@ -14,7 +14,7 @@ const COUNTDOWN_TIME = 60;
 const GAME_TIME = 600;
 
 // ============================================================
-// PLAYER
+// PLAYER SETTINGS
 // ============================================================
 
 const PLAYER_MAX_HP = 100;
@@ -24,18 +24,17 @@ const PLAYER_REGEN_AMOUNT = 5;
 const PLAYER_REGEN_INTERVAL = 500;
 
 // ============================================================
-// TIMERS
+// CREEP SETTINGS
 // ============================================================
 
 const CREEP_SPAWN_INTERVAL = 5000;
-const PLAYER_CHECK_INTERVAL = 3000;
+const CREEP_MAX_HP = 80;
 
 // ============================================================
 // PLAYERS / STATE
 // ============================================================
 
 const players = new Map();
-
 const state = {};
 
 let countdownTimer = null;
@@ -61,15 +60,12 @@ function resetState() {
     winner: 0,
 
     blueTowerHp: 1000,
-
     redTowerHp: 1000,
 
     blueBarracksHp: 500,
-
     redBarracksHp: 500,
 
     blueBarracksDestroyed: false,
-
     redBarracksDestroyed: false,
 
     creeps: [],
@@ -120,7 +116,7 @@ const wss = new WebSocket.Server({
 });
 
 // ============================================================
-// START
+// SERVER START
 // ============================================================
 
 server.listen(PORT, '0.0.0.0', () => {
@@ -136,6 +132,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('PLAYER MAX HP:', PLAYER_MAX_HP);
   console.log('PLAYER REGEN DELAY:', PLAYER_REGEN_DELAY);
   console.log('PLAYER REGEN:', PLAYER_REGEN_AMOUNT);
+  console.log('PLAYER REGEN INTERVAL:', PLAYER_REGEN_INTERVAL);
   console.log('==========================================');
   console.log('');
 
@@ -174,12 +171,14 @@ function send(ws, message) {
 
   try {
 
-    ws.send(JSON.stringify(message));
+    ws.send(
+      JSON.stringify(message)
+    );
 
   } catch (error) {
 
     console.log(
-      '[SERVER] send error:',
+      '[SERVER] Ошибка отправки:',
       error.message
     );
 
@@ -212,17 +211,17 @@ function spawn(team, respawn = false) {
 
   return {
 
-    x: team === 1
-      ? -1500
-      : 2690,
+    x: team === 1 ? -1500 : 2690,
 
-    y: respawn
-      ? 450
-      : 500
+    y: respawn ? 450 : 500
 
   };
 
 }
+
+// ============================================================
+// PLAYERS OBJECT
+// ============================================================
 
 function playersObject() {
 
@@ -258,6 +257,10 @@ function playersObject() {
 
 }
 
+// ============================================================
+// PLAYER LIST
+// ============================================================
+
 function sendPlayerList(ws) {
 
   send(ws, {
@@ -282,6 +285,10 @@ function broadcastPlayerList() {
 
 }
 
+// ============================================================
+// READY COUNT
+// ============================================================
+
 function readyCount() {
 
   let count = 0;
@@ -298,34 +305,13 @@ function readyCount() {
 
 }
 
-function formatTime(seconds) {
-
-  const safeSeconds = Math.max(
-    0,
-    Number(seconds) || 0
-  );
-
-  const minutes = Math.floor(
-    safeSeconds / 60
-  );
-
-  const secs = safeSeconds % 60;
-
-  return (
-    String(minutes).padStart(2, '0') +
-    ':' +
-    String(secs).padStart(2, '0')
-  );
-
-}
-
 // ============================================================
 // CONNECTION
 // ============================================================
 
 wss.on('connection', ws => {
 
-  console.log('[WS] New connection');
+  console.log('[WS] Новое WebSocket подключение');
 
   ws.playerData = {
 
@@ -376,7 +362,7 @@ wss.on('connection', ws => {
     } catch (error) {
 
       console.log(
-        '[WS] JSON error:',
+        '[WS] Ошибка обработки:',
         error.message
       );
 
@@ -399,7 +385,7 @@ wss.on('connection', ws => {
   ws.on('close', () => {
 
     console.log(
-      '[WS] Connection closed:',
+      '[WS] Соединение закрыто:',
       ws.playerData?.id || 'unknown'
     );
 
@@ -414,7 +400,7 @@ wss.on('connection', ws => {
   ws.on('error', error => {
 
     console.log(
-      '[WS] Error:',
+      '[WS] Ошибка:',
       error.message
     );
 
@@ -453,13 +439,6 @@ function route(ws, data) {
   if (type === 'move') {
 
     move(ws, data);
-
-    return;
-  }
-
-  if (type === 'animation') {
-
-    playerAnimation(ws, data);
 
     return;
   }
@@ -523,7 +502,7 @@ function route(ws, data) {
   }
 
   console.log(
-    '[SERVER] Unknown type:',
+    '[SERVER] Неизвестный тип:',
     type
   );
 
@@ -542,60 +521,55 @@ function join(ws, data) {
   if (!id) {
 
     send(ws, {
-
       type: 'error',
-
       message: 'ID отсутствует'
-
     });
 
     return;
   }
 
+  // Нельзя подключаться во время игры
   if (
     state.status === 'playing' ||
     state.status === 'countdown'
   ) {
 
     send(ws, {
-
       type: 'error',
-
       message: 'Игра уже началась'
-
     });
 
     return;
   }
 
+  // Максимум игроков
   if (
     players.size >= MAX_PLAYERS &&
     !players.has(id)
   ) {
 
     send(ws, {
-
       type: 'error',
-
       message: 'Лобби заполнено'
-
     });
 
     return;
   }
 
+  // ID занят
   if (players.has(id)) {
 
     send(ws, {
-
       type: 'error',
-
       message: 'ID занят'
-
     });
 
     return;
   }
+
+  // ==========================================================
+  // TEAM
+  // ==========================================================
 
   let team1 = 0;
   let team2 = 0;
@@ -618,12 +592,24 @@ function join(ws, data) {
     team = 2;
   }
 
+  // ==========================================================
+  // CHARACTER
+  // ==========================================================
+
   const character =
     Number(data.character) === 2
       ? 2
       : 1;
 
+  // ==========================================================
+  // SPAWN
+  // ==========================================================
+
   const position = spawn(team);
+
+  // ==========================================================
+  // PLAYER
+  // ==========================================================
 
   const player = {
 
@@ -641,6 +627,7 @@ function join(ws, data) {
 
     flip: false,
 
+    // НОВОЕ
     animation: 'idle',
 
     team: team,
@@ -661,13 +648,19 @@ function join(ws, data) {
 
   console.log('');
   console.log('==========================================');
-  console.log('[JOIN] ID:', id);
-  console.log('[JOIN] Nickname:', player.nickname);
-  console.log('[JOIN] Character:', player.character);
-  console.log('[JOIN] Team:', player.team);
-  console.log('[JOIN] Players:', players.size);
+  console.log('[JOIN]');
+  console.log('ID:', id);
+  console.log('Nickname:', player.nickname);
+  console.log('Character:', player.character);
+  console.log('Team:', player.team);
+  console.log('Spawn:', player.x, player.y);
+  console.log('Players:', players.size);
   console.log('==========================================');
   console.log('');
+
+  // ==========================================================
+  // JOIN SUCCESS
+  // ==========================================================
 
   send(ws, {
 
@@ -683,13 +676,19 @@ function join(ws, data) {
 
     character: player.character,
 
-    hp: player.hp,
-
-    nickname: player.nickname
+    hp: player.hp
 
   });
 
+  // ==========================================================
+  // LIST
+  // ==========================================================
+
   sendPlayerList(ws);
+
+  // ==========================================================
+  // PLAYER JOINED
+  // ==========================================================
 
   broadcast({
 
@@ -752,7 +751,7 @@ function level_ready(ws) {
 }
 
 // ============================================================
-// MOVE
+// MOVE + ANIMATION
 // ============================================================
 
 function move(ws, data) {
@@ -782,23 +781,23 @@ function move(ws, data) {
 
   p.flip = !!data.flip;
 
+  // ==========================================================
+  // PLAYER ANIMATION
+  // ==========================================================
+
   let animation = String(
     data.animation || 'idle'
   );
 
-  const allowedAnimations = [
-    'idle',
-    'run',
-    'jump',
-    'attack',
-    'death'
-  ];
-
-  if (!allowedAnimations.includes(animation)) {
-    animation = 'idle';
+  if (animation.length > 32) {
+    animation = animation.slice(0, 32);
   }
 
   p.animation = animation;
+
+  // ==========================================================
+  // SYNC
+  // ==========================================================
 
   broadcast({
 
@@ -811,58 +810,6 @@ function move(ws, data) {
     y: p.y,
 
     flip: p.flip,
-
-    animation: p.animation
-
-  }, ws);
-
-}
-
-// ============================================================
-// PLAYER ANIMATION
-// ============================================================
-
-function playerAnimation(ws, data) {
-
-  const id = ws.playerData?.id;
-
-  if (!id) {
-    return;
-  }
-
-  const p = players.get(id);
-
-  if (!p) {
-    return;
-  }
-
-  let animation = String(
-    data.animation || 'idle'
-  );
-
-  const allowedAnimations = [
-    'idle',
-    'run',
-    'jump',
-    'attack',
-    'death'
-  ];
-
-  if (!allowedAnimations.includes(animation)) {
-    animation = 'idle';
-  }
-
-  if (p.isDead) {
-    animation = 'death';
-  }
-
-  p.animation = animation;
-
-  broadcast({
-
-    type: 'player_animation',
-
-    id: p.id,
 
     animation: p.animation
 
@@ -905,7 +852,7 @@ function chat(ws, data) {
 }
 
 // ============================================================
-// READY CHECK
+// READY
 // ============================================================
 
 function checkAllReady() {
@@ -921,6 +868,10 @@ function checkAllReady() {
   if (readyCount() < MIN_PLAYERS) {
     return;
   }
+
+  console.log(
+    '[GAME] Все готовы'
+  );
 
   startCountdown();
 
@@ -1005,7 +956,9 @@ function cancelCountdown() {
 
   if (countdownTimer) {
 
-    clearInterval(countdownTimer);
+    clearInterval(
+      countdownTimer
+    );
 
     countdownTimer = null;
 
@@ -1016,9 +969,7 @@ function cancelCountdown() {
   state.countdown = COUNTDOWN_TIME;
 
   broadcast({
-
     type: 'countdown_cancel'
-
   });
 
 }
@@ -1045,9 +996,7 @@ function force_start(ws) {
   }
 
   players.forEach(p => {
-
     p.inGame = true;
-
   });
 
   startCountdown();
@@ -1073,19 +1022,6 @@ function startGame() {
 
   state.winner = 0;
 
-  state.blueTowerHp = 1000;
-  state.redTowerHp = 1000;
-
-  state.blueBarracksHp = 500;
-  state.redBarracksHp = 500;
-
-  state.blueBarracksDestroyed = false;
-  state.redBarracksDestroyed = false;
-
-  state.creeps = [];
-  state.nextCreepTeam = 1;
-  state.nextCreepId = 1;
-
   const now = Date.now();
 
   players.forEach(p => {
@@ -1099,6 +1035,10 @@ function startGame() {
     p.lastDamageTime = now;
 
   });
+
+  // ==========================================================
+  // INIT GAME
+  // ==========================================================
 
   const data = playersObject();
 
@@ -1138,10 +1078,12 @@ function startGame() {
 
   });
 
+  // ==========================================================
+  // START
+  // ==========================================================
+
   broadcast({
-
     type: 'start_game'
-
   });
 
   broadcast({
@@ -1152,6 +1094,10 @@ function startGame() {
 
   });
 
+  // ==========================================================
+  // TIMERS
+  // ==========================================================
+
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
@@ -1161,6 +1107,10 @@ function startGame() {
   playerCheckTimer = null;
   creepTimer = null;
   playerRegenTimer = null;
+
+  // ==========================================================
+  // GAME TIMER
+  // ==========================================================
 
   gameTimer = setInterval(() => {
 
@@ -1199,15 +1149,27 @@ function startGame() {
 
   }, 1000);
 
+  // ==========================================================
+  // PLAYER CHECK
+  // ==========================================================
+
   playerCheckTimer = setInterval(
     checkPlayers,
-    PLAYER_CHECK_INTERVAL
+    3000
   );
+
+  // ==========================================================
+  // REGEN
+  // ==========================================================
 
   playerRegenTimer = setInterval(
     regeneratePlayers,
     PLAYER_REGEN_INTERVAL
   );
+
+  // ==========================================================
+  // CREEPS
+  // ==========================================================
 
   creepTimer = setInterval(
     spawnCreep,
@@ -1216,7 +1178,7 @@ function startGame() {
 
   console.log('');
   console.log('==========================================');
-  console.log('[GAME] GAME STARTED');
+  console.log('[GAME] ИГРА НАЧАЛАСЬ');
   console.log('[GAME] TIMER:', formatTime(state.timer));
   console.log('[GAME] PLAYER REGEN ENABLED');
   console.log('==========================================');
@@ -1225,7 +1187,7 @@ function startGame() {
 }
 
 // ============================================================
-// PLAYER REGENERATION
+// PLAYER REGEN
 // ============================================================
 
 function regeneratePlayers() {
@@ -1250,8 +1212,7 @@ function regeneratePlayers() {
     }
 
     const elapsed =
-      now -
-      Number(
+      now - Number(
         p.lastDamageTime || now
       );
 
@@ -1289,7 +1250,35 @@ function regeneratePlayers() {
 }
 
 // ============================================================
-// SPAWN CREEP
+// FORMAT TIME
+// ============================================================
+
+function formatTime(seconds) {
+
+  const safeSeconds =
+    Math.max(
+      0,
+      Number(seconds) || 0
+    );
+
+  const minutes =
+    Math.floor(
+      safeSeconds / 60
+    );
+
+  const secs =
+    safeSeconds % 60;
+
+  return (
+    String(minutes).padStart(2, '0') +
+    ':' +
+    String(secs).padStart(2, '0')
+  );
+
+}
+
+// ============================================================
+// CREEP SPAWN
 // ============================================================
 
 function spawnCreep() {
@@ -1313,7 +1302,7 @@ function spawnCreep() {
 
     team: team,
 
-    hp: 80,
+    hp: CREEP_MAX_HP,
 
     x:
       team === 1
@@ -1356,17 +1345,23 @@ function playerDamage(_, data) {
     return;
   }
 
-  const damage = Math.max(
-    0,
-    Number(data.damage) || 10
-  );
+  const damage =
+    Math.max(
+      0,
+      Number(data.damage) || 10
+    );
 
-  p.hp = Math.max(
-    0,
-    p.hp - damage
-  );
+  p.hp =
+    Math.max(
+      0,
+      p.hp - damage
+    );
 
   p.lastDamageTime = Date.now();
+
+  console.log(
+    `[DAMAGE] ${p.id}: -${damage} HP=${p.hp}`
+  );
 
   broadcast({
 
@@ -1377,6 +1372,10 @@ function playerDamage(_, data) {
     new_hp: p.hp
 
   });
+
+  // ==========================================================
+  // DEATH
+  // ==========================================================
 
   if (p.hp <= 0) {
 
@@ -1390,21 +1389,28 @@ function playerDamage(_, data) {
 
     broadcast({
 
-      type: 'player_animation',
-
-      id: p.id,
-
-      animation: 'death'
-
-    });
-
-    broadcast({
-
       type: 'player_damage',
 
       target_id: p.id,
 
       new_hp: 0
+
+    });
+
+    // Отправляем смерть как анимацию
+    broadcast({
+
+      type: 'player_moved',
+
+      id: p.id,
+
+      x: p.x,
+
+      y: p.y,
+
+      flip: p.flip,
+
+      animation: 'death'
 
     });
 
@@ -1429,7 +1435,9 @@ function playerDamage(_, data) {
         return;
       }
 
-      respawn(currentPlayer.id);
+      respawn(
+        currentPlayer.id
+      );
 
     }, 3000);
 
@@ -1443,9 +1451,10 @@ function playerDamage(_, data) {
 
 function respawn(id) {
 
-  const p = players.get(
-    String(id || '')
-  );
+  const p =
+    players.get(
+      String(id || '')
+    );
 
   if (!p) {
     return;
@@ -1480,7 +1489,7 @@ function respawn(id) {
   p.lastDamageTime = Date.now();
 
   console.log(
-    `[RESPAWN] ${p.id} | HP=${p.hp}`
+    `[RESPAWN] ${p.id} | HP=${p.hp} | position=${p.x},${p.y}`
   );
 
   broadcast({
@@ -1499,21 +1508,17 @@ function respawn(id) {
 
   broadcast({
 
-    type: 'player_animation',
+    type: 'player_moved',
 
     id: p.id,
 
+    x: p.x,
+
+    y: p.y,
+
+    flip: false,
+
     animation: 'idle'
-
-  });
-
-  broadcast({
-
-    type: 'player_damage',
-
-    target_id: p.id,
-
-    new_hp: p.hp
 
   });
 
@@ -1764,8 +1769,6 @@ function endGame(winner) {
   creepTimer = null;
   playerRegenTimer = null;
 
-  state.creeps = [];
-
   broadcast({
 
     type: 'countdown_update',
@@ -1859,7 +1862,7 @@ function resetGame() {
   broadcastPlayerList();
 
   console.log(
-    '[GAME] Lobby reset'
+    '[GAME] Лобби сброшено'
   );
 
 }
@@ -1918,7 +1921,7 @@ function disconnect(ws) {
 }
 
 // ============================================================
-// PROCESS EXIT
+// STOP TIMERS
 // ============================================================
 
 function stopTimers() {
@@ -1937,10 +1940,14 @@ function stopTimers() {
 
 }
 
+// ============================================================
+// PROCESS EXIT
+// ============================================================
+
 process.on('SIGINT', () => {
 
   console.log(
-    '[SERVER] Stopping...'
+    '[SERVER] Остановка...'
   );
 
   stopTimers();
