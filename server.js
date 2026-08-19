@@ -6,7 +6,6 @@ const PORT = process.env.PORT || 3000;
 const MAX_PLAYERS = 6;
 const MIN_PLAYERS = 2;
 
-
 // ============================================================
 // GAME SETTINGS
 // ============================================================
@@ -14,18 +13,22 @@ const MIN_PLAYERS = 2;
 const COUNTDOWN_TIME = 60;
 const GAME_TIME = 600;
 
-
 // ============================================================
-// PLAYER SETTINGS
+// PLAYER HP / REGEN SETTINGS
 // ============================================================
 
+// Максимальное HP игрока
 const PLAYER_MAX_HP = 100;
 
-// Сколько HP восстанавливается за секунду
+// Через сколько миллисекунд после последнего урона
+// начинается регенерация.
+const PLAYER_REGEN_DELAY = 3000;
+
+// Сколько HP восстанавливать за один тик.
 const PLAYER_REGEN_AMOUNT = 5;
 
-// Интервал регенерации
-const PLAYER_REGEN_INTERVAL = 1000;
+// Интервал регенерации.
+const PLAYER_REGEN_INTERVAL = 500;
 
 
 // ============================================================
@@ -39,7 +42,7 @@ let countdownTimer = null;
 let gameTimer = null;
 let playerCheckTimer = null;
 let creepTimer = null;
-let regenTimer = null;
+let playerRegenTimer = null;
 
 
 // ============================================================
@@ -132,8 +135,11 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('COUNTDOWN:', COUNTDOWN_TIME, 'seconds');
   console.log('GAME TIME:', GAME_TIME, 'seconds');
   console.log('GAME TIME:', GAME_TIME / 60, 'minutes');
+  console.log('');
   console.log('PLAYER MAX HP:', PLAYER_MAX_HP);
-  console.log('PLAYER REGEN:', PLAYER_REGEN_AMOUNT, 'HP/sec');
+  console.log('PLAYER REGEN DELAY:', PLAYER_REGEN_DELAY, 'ms');
+  console.log('PLAYER REGEN:', PLAYER_REGEN_AMOUNT, 'HP');
+  console.log('PLAYER REGEN INTERVAL:', PLAYER_REGEN_INTERVAL, 'ms');
   console.log('==========================================');
   console.log('');
 
@@ -336,7 +342,9 @@ wss.on('connection', ws => {
 
     isDead: false,
 
-    inGame: false
+    inGame: false,
+
+    lastDamageTime: Date.now()
 
   };
 
@@ -723,7 +731,9 @@ function join(ws, data) {
 
     isDead: false,
 
-    inGame: false
+    inGame: false,
+
+    lastDamageTime: Date.now()
 
   };
 
@@ -732,7 +742,6 @@ function join(ws, data) {
     id,
     player
   );
-
 
   ws.playerData = player;
 
@@ -745,7 +754,6 @@ function join(ws, data) {
   console.log('[JOIN] Character:', player.character);
   console.log('[JOIN] Team:', player.team);
   console.log('[JOIN] Spawn:', player.x, player.y);
-  console.log('[JOIN] HP:', player.hp);
   console.log('[JOIN] Players:', players.size);
   console.log('==========================================');
   console.log('');
@@ -767,7 +775,9 @@ function join(ws, data) {
 
     y: player.y,
 
-    character: player.character
+    character: player.character,
+
+    hp: player.hp
 
   });
 
@@ -799,7 +809,9 @@ function join(ws, data) {
 
     flip: player.flip,
 
-    team: player.team
+    team: player.team,
+
+    hp: player.hp
 
   }, ws);
 
@@ -832,19 +844,15 @@ function level_ready(ws) {
     return;
   }
 
-
   if (state.status === 'playing') {
     return;
   }
 
-
   p.inGame = true;
-
 
   console.log(
     `[READY] ${id} готов | ready=${readyCount()} players=${players.size}`
   );
-
 
   checkAllReady();
 
@@ -869,10 +877,8 @@ function move(ws, data) {
     return;
   }
 
-
   const x = Number(data.x);
   const y = Number(data.y);
-
 
   if (Number.isFinite(x)) {
     p.x = x;
@@ -882,9 +888,7 @@ function move(ws, data) {
     p.y = y;
   }
 
-
   p.flip = !!data.flip;
-
 
   broadcast({
 
@@ -917,16 +921,13 @@ function chat(ws, data) {
     return;
   }
 
-
   const message = String(
     data.message || ''
   ).trim();
 
-
   if (!message) {
     return;
   }
-
 
   broadcast({
 
@@ -951,21 +952,17 @@ function checkAllReady() {
     return;
   }
 
-
   if (players.size < MIN_PLAYERS) {
     return;
   }
-
 
   if (readyCount() < MIN_PLAYERS) {
     return;
   }
 
-
   console.log(
     '[GAME] Все готовы. Запускаем countdown на 60 секунд.'
   );
-
 
   startCountdown();
 
@@ -973,7 +970,7 @@ function checkAllReady() {
 
 
 // ============================================================
-// COUNTDOWN 60 SECONDS
+// COUNTDOWN
 // ============================================================
 
 function startCountdown() {
@@ -982,20 +979,13 @@ function startCountdown() {
     return;
   }
 
-
   if (state.status === 'playing') {
     return;
   }
 
-
   state.status = 'countdown';
 
   state.countdown = COUNTDOWN_TIME;
-
-
-  // ==========================================================
-  // СРАЗУ ОТПРАВЛЯЕМ 60
-  // ==========================================================
 
   broadcast({
 
@@ -1004,7 +994,6 @@ function startCountdown() {
     time: state.countdown
 
   });
-
 
   console.log(
     `[GAME] Countdown started: ${state.countdown} seconds`
@@ -1022,11 +1011,6 @@ function startCountdown() {
       return;
     }
 
-
-    // ========================================================
-    // ПРОВЕРКА ИГРОКОВ
-    // ========================================================
-
     if (
       players.size < MIN_PLAYERS ||
       readyCount() < MIN_PLAYERS
@@ -1041,9 +1025,7 @@ function startCountdown() {
       return;
     }
 
-
     state.countdown--;
-
 
     broadcast({
 
@@ -1052,7 +1034,6 @@ function startCountdown() {
       time: state.countdown
 
     });
-
 
     if (state.countdown <= 0) {
 
@@ -1085,18 +1066,15 @@ function cancelCountdown() {
 
   }
 
-
   state.status = 'lobby';
 
   state.countdown = COUNTDOWN_TIME;
-
 
   broadcast({
 
     type: 'countdown_cancel'
 
   });
-
 
   console.log(
     '[GAME] Countdown отменён'
@@ -1126,13 +1104,11 @@ function force_start(ws) {
     return;
   }
 
-
   players.forEach(p => {
 
     p.inGame = true;
 
   });
-
 
   startCountdown();
 
@@ -1152,10 +1128,26 @@ function startGame() {
     return;
   }
 
-
   state.status = 'playing';
 
   state.timer = GAME_TIME;
+
+
+  // ==========================================================
+  // RESET PLAYER HP / REGEN STATE
+  // ==========================================================
+
+  const now = Date.now();
+
+  players.forEach(p => {
+
+    p.hp = PLAYER_MAX_HP;
+
+    p.isDead = false;
+
+    p.lastDamageTime = now;
+
+  });
 
 
   const data = playersObject();
@@ -1174,7 +1166,6 @@ function startGame() {
     if (!p) {
       return;
     }
-
 
     send(ws, {
 
@@ -1215,7 +1206,7 @@ function startGame() {
 
 
   // ==========================================================
-  // СРАЗУ ОТПРАВЛЯЕМ 10:00
+  // GAME TIMER DISPLAY
   // ==========================================================
 
   broadcast({
@@ -1234,13 +1225,13 @@ function startGame() {
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
-  clearInterval(regenTimer);
+  clearInterval(playerRegenTimer);
 
 
   gameTimer = null;
   playerCheckTimer = null;
   creepTimer = null;
-  regenTimer = null;
+  playerRegenTimer = null;
 
 
   // ==========================================================
@@ -1258,14 +1249,11 @@ function startGame() {
       return;
     }
 
-
     state.timer--;
-
 
     if (state.timer < 0) {
       state.timer = 0;
     }
-
 
     broadcast({
 
@@ -1275,11 +1263,9 @@ function startGame() {
 
     });
 
-
     console.log(
       `[GAME TIMER] ${formatTime(state.timer)}`
     );
-
 
     if (state.timer <= 0) {
 
@@ -1305,6 +1291,16 @@ function startGame() {
 
 
   // ==========================================================
+  // SERVER PLAYER REGEN
+  // ==========================================================
+
+  playerRegenTimer = setInterval(
+    regeneratePlayers,
+    PLAYER_REGEN_INTERVAL
+  );
+
+
+  // ==========================================================
   // CREEPS
   // ==========================================================
 
@@ -1314,23 +1310,15 @@ function startGame() {
   );
 
 
-  // ==========================================================
-  // PLAYER REGENERATION
-  // ==========================================================
-
-  regenTimer = setInterval(
-    regeneratePlayers,
-    PLAYER_REGEN_INTERVAL
-  );
-
-
   console.log('');
   console.log('==========================================');
   console.log('[GAME] ИГРА НАЧАЛАСЬ');
   console.log('[GAME] Длительность:', GAME_TIME, 'секунд');
   console.log('[GAME] Длительность:', GAME_TIME / 60, 'минут');
   console.log('[GAME] Таймер:', formatTime(state.timer));
-  console.log('[GAME] REGEN:', PLAYER_REGEN_AMOUNT, 'HP/sec');
+  console.log('[GAME] SERVER HP REGEN ENABLED');
+  console.log('[GAME] REGEN:', PLAYER_REGEN_AMOUNT, 'HP');
+  console.log('[GAME] REGEN DELAY:', PLAYER_REGEN_DELAY, 'ms');
   console.log('==========================================');
   console.log('');
 
@@ -1338,7 +1326,7 @@ function startGame() {
 
 
 // ============================================================
-// PLAYER REGENERATION
+// SERVER PLAYER REGENERATION
 // ============================================================
 
 function regeneratePlayers() {
@@ -1347,51 +1335,67 @@ function regeneratePlayers() {
     return;
   }
 
+  const now = Date.now();
 
   players.forEach(p => {
 
     // --------------------------------------------------------
-    // Игрок мёртв — реген не работает
+    // Мёртвые игроки не регенятся
     // --------------------------------------------------------
 
     if (p.isDead) {
       return;
     }
 
-
     // --------------------------------------------------------
-    // HP уже максимум
+    // Уже полное HP
     // --------------------------------------------------------
 
     if (p.hp >= PLAYER_MAX_HP) {
+
+      p.hp = PLAYER_MAX_HP;
+
       return;
     }
 
+    // --------------------------------------------------------
+    // Сколько прошло после последнего урона
+    // --------------------------------------------------------
+
+    const elapsed =
+      now - Number(
+        p.lastDamageTime || now
+      );
+
+    // --------------------------------------------------------
+    // Ждём 3 секунды после урона
+    // --------------------------------------------------------
+
+    if (elapsed < PLAYER_REGEN_DELAY) {
+      return;
+    }
+
+    // --------------------------------------------------------
+    // РЕГЕН
+    // --------------------------------------------------------
 
     const oldHp = p.hp;
-
-
-    // --------------------------------------------------------
-    // Восстанавливаем HP
-    // --------------------------------------------------------
 
     p.hp = Math.min(
       PLAYER_MAX_HP,
       p.hp + PLAYER_REGEN_AMOUNT
     );
 
-
-    // --------------------------------------------------------
-    // Если HP не изменилось
-    // --------------------------------------------------------
-
     if (p.hp === oldHp) {
       return;
     }
 
+    console.log(
+      `[REGEN] ${p.id}: ${oldHp} -> ${p.hp}`
+    );
 
     // --------------------------------------------------------
-    // ОТПРАВЛЯЕМ НОВЫЙ HP ВСЕМ
+    // ОТПРАВЛЯЕМ HP ВСЕМ КЛИЕНТАМ
     // --------------------------------------------------------
 
     broadcast({
@@ -1403,11 +1407,6 @@ function regeneratePlayers() {
       new_hp: p.hp
 
     });
-
-
-    console.log(
-      `[REGEN] ${p.id}: ${oldHp} -> ${p.hp}`
-    );
 
   });
 
@@ -1426,16 +1425,13 @@ function formatTime(seconds) {
       Number(seconds) || 0
     );
 
-
   const minutes =
     Math.floor(
       safeSeconds / 60
     );
 
-
   const secs =
     safeSeconds % 60;
-
 
   return (
     String(minutes).padStart(2, '0') +
@@ -1456,16 +1452,13 @@ function spawnCreep() {
     return;
   }
 
-
   const team =
     state.nextCreepTeam;
-
 
   state.nextCreepTeam =
     team === 1
       ? 2
       : 1;
-
 
   const creep = {
 
@@ -1485,11 +1478,9 @@ function spawnCreep() {
 
   };
 
-
   state.creeps.push(
     creep
   );
-
 
   broadcast({
 
@@ -1506,53 +1497,27 @@ function spawnCreep() {
 // PLAYER DAMAGE
 // ============================================================
 
-function playerDamage(ws, data) {
+function playerDamage(_, data) {
 
   if (state.status !== 'playing') {
     return;
   }
 
-
-  const attackerId = ws.playerData?.id;
-
-  const targetId = String(
+  const id = String(
     data.target_id || ''
   );
 
-
-  const p = players.get(targetId);
-
+  const p = players.get(id);
 
   if (!p || p.isDead) {
     return;
   }
-
-
-  // ==========================================================
-  // НЕ ДАЁМ ИГРОКУ АТАКОВАТЬ САМОГО СЕБЯ
-  // ==========================================================
-
-  if (
-    attackerId &&
-    attackerId === targetId
-  ) {
-
-    return;
-
-  }
-
 
   const damage =
     Math.max(
       0,
       Number(data.damage) || 10
     );
-
-
-  if (damage <= 0) {
-    return;
-  }
-
 
   // ==========================================================
   // DAMAGE
@@ -1565,13 +1530,21 @@ function playerDamage(ws, data) {
     );
 
 
+  // ==========================================================
+  // ВАЖНО:
+  // КАЖДЫЙ УРОН ПЕРЕЗАПУСКАЕТ ТАЙМЕР РЕГЕНА
+  // ==========================================================
+
+  p.lastDamageTime = Date.now();
+
+
   console.log(
     `[DAMAGE] ${p.id}: -${damage} HP=${p.hp}`
   );
 
 
   // ==========================================================
-  // SYNC HP TO EVERYONE
+  // SYNC HP
   // ==========================================================
 
   broadcast({
@@ -1595,10 +1568,13 @@ function playerDamage(ws, data) {
 
     p.isDead = true;
 
+    p.lastDamageTime = Date.now();
 
-    // --------------------------------------------------------
-    // Немедленно отправляем состояние смерти
-    // --------------------------------------------------------
+
+    console.log(
+      `[DEATH] ${p.id}`
+    );
+
 
     broadcast({
 
@@ -1611,32 +1587,30 @@ function playerDamage(ws, data) {
     });
 
 
-    console.log(
-      `[DEATH] ${p.id}`
-    );
-
-
-    // --------------------------------------------------------
-    // RESPawn через 3 секунды
-    // --------------------------------------------------------
+    // ========================================================
+    // SERVER CONTROLLED RESPAWN
+    // ========================================================
 
     setTimeout(() => {
 
       const currentPlayer =
         players.get(p.id);
 
-
       if (!currentPlayer) {
         return;
       }
 
+      if (state.status !== 'playing') {
+        return;
+      }
 
       if (!currentPlayer.isDead) {
         return;
       }
 
-
-      respawn(currentPlayer.id);
+      respawn(
+        currentPlayer.id
+      );
 
     }, 3000);
 
@@ -1656,19 +1630,16 @@ function respawn(id) {
       String(id || '')
     );
 
-
   if (!p) {
     return;
   }
-
 
   if (state.status !== 'playing') {
     return;
   }
 
-
   // ==========================================================
-  // Если игрок уже жив — повторно не возрождаем
+  // НЕ ВОЗРОЖДАЕМ ЖИВОГО
   // ==========================================================
 
   if (!p.isDead) {
@@ -1684,7 +1655,7 @@ function respawn(id) {
 
 
   // ==========================================================
-  // RESET PLAYER
+  // НОВАЯ ЖИЗНЬ
   // ==========================================================
 
   p.hp = PLAYER_MAX_HP;
@@ -1695,20 +1666,23 @@ function respawn(id) {
 
   p.y = position.y;
 
-
-  console.log('');
-  console.log('==========================================');
-  console.log('[RESPAWN]');
-  console.log('[RESPAWN] ID:', p.id);
-  console.log('[RESPAWN] Team:', p.team);
-  console.log('[RESPAWN] HP:', p.hp);
-  console.log('[RESPAWN] Position:', p.x, p.y);
-  console.log('==========================================');
-  console.log('');
+  p.flip = false;
 
 
   // ==========================================================
-  // SEND RESPAWN TO EVERYONE
+  // РЕГЕН НЕ НАЧИНАЕТСЯ СРАЗУ
+  // ==========================================================
+
+  p.lastDamageTime = Date.now();
+
+
+  console.log(
+    `[RESPAWN] ${p.id} | HP=${p.hp} | position=${p.x},${p.y}`
+  );
+
+
+  // ==========================================================
+  // ОТПРАВЛЯЕМ ВОЗРОЖДЕНИЕ
   // ==========================================================
 
   broadcast({
@@ -1727,7 +1701,7 @@ function respawn(id) {
 
 
   // ==========================================================
-  // EXTRA HP SYNC
+  // ДОПОЛНИТЕЛЬНО СИНХРОНИЗИРУЕМ HP
   // ==========================================================
 
   broadcast({
@@ -1753,16 +1727,13 @@ function towerDamage(_, data) {
     return;
   }
 
-
   const blue =
     Number(data.town_id) === 1;
-
 
   const key =
     blue
       ? 'blueTowerHp'
       : 'redTowerHp';
-
 
   const damage =
     Math.max(
@@ -1770,18 +1741,11 @@ function towerDamage(_, data) {
       Number(data.damage) || 10
     );
 
-
-  if (damage <= 0) {
-    return;
-  }
-
-
   state[key] =
     Math.max(
       0,
       state[key] - damage
     );
-
 
   broadcast({
 
@@ -1796,7 +1760,6 @@ function towerDamage(_, data) {
       state[key]
 
   });
-
 
   if (state[key] <= 0) {
 
@@ -1821,22 +1784,18 @@ function barracksDamage(_, data) {
     return;
   }
 
-
   const blue =
     Number(data.barracks_id) === 1;
-
 
   const hpKey =
     blue
       ? 'blueBarracksHp'
       : 'redBarracksHp';
 
-
   const deadKey =
     blue
       ? 'blueBarracksDestroyed'
       : 'redBarracksDestroyed';
-
 
   const damage =
     Math.max(
@@ -1844,18 +1803,11 @@ function barracksDamage(_, data) {
       Number(data.damage) || 10
     );
 
-
-  if (damage <= 0) {
-    return;
-  }
-
-
   state[hpKey] =
     Math.max(
       0,
       state[hpKey] - damage
     );
-
 
   broadcast({
 
@@ -1871,14 +1823,12 @@ function barracksDamage(_, data) {
 
   });
 
-
   if (
     state[hpKey] <= 0 &&
     !state[deadKey]
   ) {
 
     state[deadKey] = true;
-
 
     broadcast({
 
@@ -1906,23 +1856,19 @@ function creepDamage(_, data) {
     return;
   }
 
-
   const id =
     String(
       data.id || ''
     );
-
 
   const creep =
     state.creeps.find(
       item => item.id === id
     );
 
-
   if (!creep) {
     return;
   }
-
 
   const damage =
     Math.max(
@@ -1930,18 +1876,11 @@ function creepDamage(_, data) {
       Number(data.damage) || 10
     );
 
-
-  if (damage <= 0) {
-    return;
-  }
-
-
   creep.hp =
     Math.max(
       0,
       creep.hp - damage
     );
-
 
   broadcast({
 
@@ -1953,14 +1892,12 @@ function creepDamage(_, data) {
 
   });
 
-
   if (creep.hp <= 0) {
 
     state.creeps =
       state.creeps.filter(
         item => item !== creep
       );
-
 
     broadcast({
 
@@ -1985,14 +1922,12 @@ function checkPlayers() {
     return;
   }
 
-
   if (players.size < MIN_PLAYERS) {
 
     const remaining =
       players.size > 0
         ? [...players.values()][0]
         : null;
-
 
     endGame(
       remaining
@@ -2015,7 +1950,6 @@ function endGame(winner) {
     return;
   }
 
-
   state.status = 'finished';
 
   state.winner = winner;
@@ -2030,13 +1964,12 @@ function endGame(winner) {
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
-  clearInterval(regenTimer);
-
+  clearInterval(playerRegenTimer);
 
   gameTimer = null;
   playerCheckTimer = null;
   creepTimer = null;
-  regenTimer = null;
+  playerRegenTimer = null;
 
 
   // ==========================================================
@@ -2109,34 +2042,7 @@ function endGame(winner) {
 
 function resetGame() {
 
-  // ==========================================================
-  // ОСТАНАВЛИВАЕМ ВСЕ ТАЙМЕРЫ
-  // ==========================================================
-
-  clearInterval(countdownTimer);
-  clearInterval(gameTimer);
-  clearInterval(playerCheckTimer);
-  clearInterval(creepTimer);
-  clearInterval(regenTimer);
-
-
-  countdownTimer = null;
-  gameTimer = null;
-  playerCheckTimer = null;
-  creepTimer = null;
-  regenTimer = null;
-
-
-  // ==========================================================
-  // RESET STATE
-  // ==========================================================
-
   resetState();
-
-
-  // ==========================================================
-  // RESET PLAYERS
-  // ==========================================================
 
   players.forEach(p => {
 
@@ -2145,7 +2051,6 @@ function resetGame() {
         p.team,
         true
       );
-
 
     Object.assign(p, {
 
@@ -2159,16 +2064,14 @@ function resetGame() {
 
       y: position.y,
 
-      flip: false
+      flip: false,
+
+      lastDamageTime: Date.now()
 
     });
 
   });
 
-
-  // ==========================================================
-  // RESET LOBBY
-  // ==========================================================
 
   broadcast({
 
@@ -2196,24 +2099,19 @@ function disconnect(ws) {
   const id =
     ws.playerData?.id;
 
-
   if (!id) {
     return;
   }
-
 
   if (!players.has(id)) {
     return;
   }
 
-
   players.delete(id);
-
 
   console.log(
     `[DISCONNECT] ${id} | players=${players.size}`
   );
-
 
   broadcast({
 
@@ -2223,12 +2121,11 @@ function disconnect(ws) {
 
   });
 
-
   broadcastPlayerList();
 
 
   // ==========================================================
-  // CANCEL COUNTDOWN IF NOT ENOUGH PLAYERS
+  // CANCEL COUNTDOWN
   // ==========================================================
 
   if (
@@ -2267,20 +2164,17 @@ process.on('SIGINT', () => {
     '[SERVER] Остановка...'
   );
 
-
   clearInterval(countdownTimer);
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
-  clearInterval(regenTimer);
-
+  clearInterval(playerRegenTimer);
 
   countdownTimer = null;
   gameTimer = null;
   playerCheckTimer = null;
   creepTimer = null;
-  regenTimer = null;
-
+  playerRegenTimer = null;
 
   process.exit(0);
 
@@ -2293,20 +2187,11 @@ process.on('SIGTERM', () => {
     '[SERVER] SIGTERM'
   );
 
-
   clearInterval(countdownTimer);
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
-  clearInterval(regenTimer);
-
-
-  countdownTimer = null;
-  gameTimer = null;
-  playerCheckTimer = null;
-  creepTimer = null;
-  regenTimer = null;
-
+  clearInterval(playerRegenTimer);
 
   process.exit(0);
 
