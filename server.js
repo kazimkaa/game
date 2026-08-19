@@ -198,7 +198,9 @@ function broadcast(message, exclude = null) {
     ) {
 
       try {
+
         ws.send(json);
+
       } catch (_) {}
 
     }
@@ -528,40 +530,58 @@ function join(ws, data) {
     return;
   }
 
-  // Нельзя подключаться во время игры
+  // ==========================================================
+  // НЕЛЬЗЯ ВОЙТИ ВО ВРЕМЯ ИГРЫ
+  // ==========================================================
+
   if (
     state.status === 'playing' ||
     state.status === 'countdown'
   ) {
 
     send(ws, {
+
       type: 'error',
+
       message: 'Игра уже началась'
+
     });
 
     return;
   }
 
-  // Максимум игроков
+  // ==========================================================
+  // MAX PLAYERS
+  // ==========================================================
+
   if (
     players.size >= MAX_PLAYERS &&
     !players.has(id)
   ) {
 
     send(ws, {
+
       type: 'error',
+
       message: 'Лобби заполнено'
+
     });
 
     return;
   }
 
-  // ID занят
+  // ==========================================================
+  // ID ЗАНЯТ
+  // ==========================================================
+
   if (players.has(id)) {
 
     send(ws, {
+
       type: 'error',
+
       message: 'ID занят'
+
     });
 
     return;
@@ -627,7 +647,6 @@ function join(ws, data) {
 
     flip: false,
 
-    // НОВОЕ
     animation: 'idle',
 
     team: team,
@@ -676,25 +695,32 @@ function join(ws, data) {
 
     character: player.character,
 
+    nickname: player.nickname,
+
+    flip: player.flip,
+
+    animation: player.animation,
+
     hp: player.hp
 
   });
 
   // ==========================================================
-  // LIST
+  // ВАЖНО:
+  // СНАЧАЛА НОВОМУ КЛИЕНТУ ПОЛНЫЙ СПИСОК
   // ==========================================================
 
   sendPlayerList(ws);
 
   // ==========================================================
-  // PLAYER JOINED
+  // ПОТОМ ОСТАЛЬНЫМ КЛИЕНТАМ НОВОГО ИГРОКА
   // ==========================================================
 
   broadcast({
 
-    type: 'player_joined',
+    type: 'spawn_player',
 
-    id: id,
+    id: player.id,
 
     nickname: player.nickname,
 
@@ -713,6 +739,10 @@ function join(ws, data) {
     hp: player.hp
 
   }, ws);
+
+  // ==========================================================
+  // ОБНОВЛЯЕМ СПИСОК ДЛЯ ВСЕХ
+  // ==========================================================
 
   broadcastPlayerList();
 
@@ -781,10 +811,6 @@ function move(ws, data) {
 
   p.flip = !!data.flip;
 
-  // ==========================================================
-  // PLAYER ANIMATION
-  // ==========================================================
-
   let animation = String(
     data.animation || 'idle'
   );
@@ -794,10 +820,6 @@ function move(ws, data) {
   }
 
   p.animation = animation;
-
-  // ==========================================================
-  // SYNC
-  // ==========================================================
 
   broadcast({
 
@@ -1036,10 +1058,6 @@ function startGame() {
 
   });
 
-  // ==========================================================
-  // INIT GAME
-  // ==========================================================
-
   const data = playersObject();
 
   wss.clients.forEach(ws => {
@@ -1078,10 +1096,6 @@ function startGame() {
 
   });
 
-  // ==========================================================
-  // START
-  // ==========================================================
-
   broadcast({
     type: 'start_game'
   });
@@ -1094,10 +1108,6 @@ function startGame() {
 
   });
 
-  // ==========================================================
-  // TIMERS
-  // ==========================================================
-
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
@@ -1107,10 +1117,6 @@ function startGame() {
   playerCheckTimer = null;
   creepTimer = null;
   playerRegenTimer = null;
-
-  // ==========================================================
-  // GAME TIMER
-  // ==========================================================
 
   gameTimer = setInterval(() => {
 
@@ -1149,27 +1155,15 @@ function startGame() {
 
   }, 1000);
 
-  // ==========================================================
-  // PLAYER CHECK
-  // ==========================================================
-
   playerCheckTimer = setInterval(
     checkPlayers,
     3000
   );
 
-  // ==========================================================
-  // REGEN
-  // ==========================================================
-
   playerRegenTimer = setInterval(
     regeneratePlayers,
     PLAYER_REGEN_INTERVAL
   );
-
-  // ==========================================================
-  // CREEPS
-  // ==========================================================
 
   creepTimer = setInterval(
     spawnCreep,
@@ -1373,10 +1367,6 @@ function playerDamage(_, data) {
 
   });
 
-  // ==========================================================
-  // DEATH
-  // ==========================================================
-
   if (p.hp <= 0) {
 
     p.hp = 0;
@@ -1397,7 +1387,6 @@ function playerDamage(_, data) {
 
     });
 
-    // Отправляем смерть как анимацию
     broadcast({
 
       type: 'player_moved',
