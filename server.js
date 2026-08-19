@@ -14,48 +14,29 @@ const COUNTDOWN_TIME = 60;
 const GAME_TIME = 600;
 
 // ============================================================
-// PLAYER SETTINGS
+// PLAYER HP / REGEN SETTINGS
 // ============================================================
 
+// Максимальное HP игрока
 const PLAYER_MAX_HP = 100;
 
+// Через сколько миллисекунд после последнего урона
+// начинается регенерация.
 const PLAYER_REGEN_DELAY = 3000;
+
+// Сколько HP восстанавливать за один тик.
 const PLAYER_REGEN_AMOUNT = 5;
+
+// Интервал регенерации.
 const PLAYER_REGEN_INTERVAL = 500;
 
-// ============================================================
-// CREEP SETTINGS
-// ============================================================
-
-const CREEP_SPAWN_INTERVAL = 5000;
-const CREEP_MAX_HP = 80;
 
 // ============================================================
 // PLAYERS / STATE
 // ============================================================
 
 const players = new Map();
-
-const state = {
-  status: 'lobby',
-  countdown: COUNTDOWN_TIME,
-  timer: GAME_TIME,
-  winner: 0,
-
-  blueTowerHp: 1000,
-  redTowerHp: 1000,
-
-  blueBarracksHp: 500,
-  redBarracksHp: 500,
-
-  blueBarracksDestroyed: false,
-  redBarracksDestroyed: false,
-
-  creeps: [],
-
-  nextCreepTeam: 1,
-  nextCreepId: 1
-};
+const state = {};
 
 let countdownTimer = null;
 let gameTimer = null;
@@ -63,35 +44,47 @@ let playerCheckTimer = null;
 let creepTimer = null;
 let playerRegenTimer = null;
 
+
 // ============================================================
-// RESET STATE
+// STATE
 // ============================================================
 
 function resetState() {
 
-  state.status = 'lobby';
+  Object.assign(state, {
 
-  state.countdown = COUNTDOWN_TIME;
-  state.timer = GAME_TIME;
-  state.winner = 0;
+    status: 'lobby',
 
-  state.blueTowerHp = 1000;
-  state.redTowerHp = 1000;
+    countdown: COUNTDOWN_TIME,
 
-  state.blueBarracksHp = 500;
-  state.redBarracksHp = 500;
+    timer: GAME_TIME,
 
-  state.blueBarracksDestroyed = false;
-  state.redBarracksDestroyed = false;
+    winner: 0,
 
-  state.creeps = [];
+    blueTowerHp: 1000,
+    redTowerHp: 1000,
 
-  state.nextCreepTeam = 1;
-  state.nextCreepId = 1;
+    blueBarracksHp: 500,
+    redBarracksHp: 500,
+
+    blueBarracksDestroyed: false,
+    redBarracksDestroyed: false,
+
+    creeps: [],
+
+    nextCreepTeam: 1,
+
+    nextCreepId: 1
+
+  });
+
 }
 
+resetState();
+
+
 // ============================================================
-// HTTP
+// HTTP SERVER
 // ============================================================
 
 const server = http.createServer((req, res) => {
@@ -113,7 +106,9 @@ const server = http.createServer((req, res) => {
   });
 
   res.end('WebSocket game server');
+
 });
+
 
 // ============================================================
 // WEBSOCKET
@@ -124,8 +119,9 @@ const wss = new WebSocket.Server({
   maxPayload: 1024 * 1024
 });
 
+
 // ============================================================
-// SERVER START
+// START SERVER
 // ============================================================
 
 server.listen(PORT, '0.0.0.0', () => {
@@ -136,11 +132,19 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('PORT:', PORT);
   console.log('MAX PLAYERS:', MAX_PLAYERS);
   console.log('MIN PLAYERS:', MIN_PLAYERS);
-  console.log('COUNTDOWN:', COUNTDOWN_TIME);
-  console.log('GAME TIME:', GAME_TIME);
+  console.log('COUNTDOWN:', COUNTDOWN_TIME, 'seconds');
+  console.log('GAME TIME:', GAME_TIME, 'seconds');
+  console.log('GAME TIME:', GAME_TIME / 60, 'minutes');
+  console.log('');
+  console.log('PLAYER MAX HP:', PLAYER_MAX_HP);
+  console.log('PLAYER REGEN DELAY:', PLAYER_REGEN_DELAY, 'ms');
+  console.log('PLAYER REGEN:', PLAYER_REGEN_AMOUNT, 'HP');
+  console.log('PLAYER REGEN INTERVAL:', PLAYER_REGEN_INTERVAL, 'ms');
   console.log('==========================================');
   console.log('');
+
 });
+
 
 // ============================================================
 // KEEP ALIVE
@@ -152,15 +156,8 @@ setInterval(() => {
     `[SERVER] alive | players=${players.size} | status=${state.status} | timer=${state.timer}`
   );
 
-  players.forEach((p, id) => {
-
-    console.log(
-      `[SERVER] player=${id} team=${p.team} ws=${p.ws ? 'YES' : 'NO'}`
-    );
-
-  });
-
 }, 30000);
+
 
 // ============================================================
 // HELPERS
@@ -172,38 +169,33 @@ function open(ws) {
     ws &&
     ws.readyState === WebSocket.OPEN
   );
+
 }
 
-// ============================================================
-// SEND
-// ============================================================
 
 function send(ws, message) {
 
   if (!open(ws)) {
-    return false;
+    return;
   }
 
   try {
 
-    ws.send(JSON.stringify(message));
-
-    return true;
+    ws.send(
+      JSON.stringify(message)
+    );
 
   } catch (error) {
 
     console.log(
-      '[SERVER] SEND ERROR:',
+      '[SERVER] Ошибка отправки:',
       error.message
     );
 
-    return false;
   }
+
 }
 
-// ============================================================
-// BROADCAST
-// ============================================================
 
 function broadcast(message, exclude = null) {
 
@@ -220,73 +212,31 @@ function broadcast(message, exclude = null) {
 
         ws.send(json);
 
-      } catch (error) {
-
-        console.log(
-          '[SERVER] BROADCAST ERROR:',
-          error.message
-        );
-
-      }
-    }
-
-  });
-}
-
-// ============================================================
-// BROADCAST ONLY JOINED PLAYERS
-// ============================================================
-
-function broadcastToPlayers(message, exclude = null) {
-
-  const json = JSON.stringify(message);
-
-  players.forEach(player => {
-
-    const ws = player.ws;
-
-    if (
-      ws &&
-      ws !== exclude &&
-      open(ws)
-    ) {
-
-      try {
-
-        ws.send(json);
-
-      } catch (error) {
-
-        console.log(
-          '[SERVER] PLAYER BROADCAST ERROR:',
-          error.message
-        );
-
-      }
+      } catch (_) {}
 
     }
 
   });
+
 }
 
-// ============================================================
-// SPAWN
-// ============================================================
 
 function spawn(team, respawn = false) {
 
   return {
 
-    x: team === 1 ? -1500 : 2690,
+    x: team === 1
+      ? -1500
+      : 2690,
 
-    y: respawn ? 450 : 500
+    y: respawn
+      ? 450
+      : 500
 
   };
+
 }
 
-// ============================================================
-// PLAYERS OBJECT
-// ============================================================
 
 function playersObject() {
 
@@ -306,26 +256,20 @@ function playersObject() {
 
       flip: p.flip,
 
-      animation: p.animation,
-
       team: p.team,
 
       hp: p.hp,
 
-      isDead: p.isDead,
-
-      inGame: p.inGame
+      isDead: p.isDead
 
     };
 
   });
 
   return result;
+
 }
 
-// ============================================================
-// SEND PLAYER LIST
-// ============================================================
 
 function sendPlayerList(ws) {
 
@@ -339,9 +283,6 @@ function sendPlayerList(ws) {
 
 }
 
-// ============================================================
-// BROADCAST PLAYER LIST
-// ============================================================
 
 function broadcastPlayerList() {
 
@@ -355,24 +296,23 @@ function broadcastPlayerList() {
 
 }
 
-// ============================================================
-// READY COUNT
-// ============================================================
 
 function readyCount() {
 
   let count = 0;
 
-  players.forEach(player => {
+  players.forEach(p => {
 
-    if (player.inGame) {
+    if (p.inGame) {
       count++;
     }
 
   });
 
   return count;
+
 }
+
 
 // ============================================================
 // CONNECTION
@@ -380,11 +320,7 @@ function readyCount() {
 
 wss.on('connection', ws => {
 
-  console.log('');
-  console.log('==========================================');
-  console.log('[WS] NEW CONNECTION');
-  console.log('Total sockets:', wss.clients.size);
-  console.log('==========================================');
+  console.log('[WS] Новое WebSocket подключение');
 
   ws.playerData = {
 
@@ -400,8 +336,6 @@ wss.on('connection', ws => {
 
     flip: false,
 
-    animation: 'idle',
-
     team: 0,
 
     hp: PLAYER_MAX_HP,
@@ -413,6 +347,7 @@ wss.on('connection', ws => {
     lastDamageTime: Date.now()
 
   };
+
 
   // ==========================================================
   // MESSAGE
@@ -430,16 +365,12 @@ wss.on('connection', ws => {
 
       const data = JSON.parse(text);
 
-      console.log(
-        `[WS] MESSAGE type=${data.type || 'unknown'} id=${data.id || ws.playerData.id || 'unknown'}`
-      );
-
       route(ws, data);
 
     } catch (error) {
 
       console.log(
-        '[WS] MESSAGE ERROR:',
+        '[WS] Ошибка обработки сообщения:',
         error.message
       );
 
@@ -455,6 +386,7 @@ wss.on('connection', ws => {
 
   });
 
+
   // ==========================================================
   // CLOSE
   // ==========================================================
@@ -462,13 +394,14 @@ wss.on('connection', ws => {
   ws.on('close', () => {
 
     console.log(
-      '[WS] CLOSED:',
+      '[WS] Соединение закрыто:',
       ws.playerData?.id || 'unknown'
     );
 
     disconnect(ws);
 
   });
+
 
   // ==========================================================
   // ERROR
@@ -477,13 +410,14 @@ wss.on('connection', ws => {
   ws.on('error', error => {
 
     console.log(
-      '[WS] SOCKET ERROR:',
+      '[WS] Ошибка:',
       error.message
     );
 
   });
 
 });
+
 
 // ============================================================
 // ROUTER
@@ -495,70 +429,152 @@ function route(ws, data) {
     return;
   }
 
-  const type = String(data.type || '');
+  const type = data.type;
 
-  switch (type) {
 
-    case 'ping':
-      send(ws, {
-        type: 'pong'
-      });
-      break;
+  // ==========================================================
+  // PING
+  // ==========================================================
 
-    case 'join':
-      join(ws, data);
-      break;
+  if (type === 'ping') {
 
-    case 'move':
-      move(ws, data);
-      break;
+    send(ws, {
+      type: 'pong'
+    });
 
-    case 'animation':
-      animation(ws, data);
-      break;
-
-    case 'chat':
-      chat(ws, data);
-      break;
-
-    case 'level_ready':
-      level_ready(ws);
-      break;
-
-    case 'force_start':
-      force_start(ws);
-      break;
-
-    case 'player_damage':
-      playerDamage(ws, data);
-      break;
-
-    case 'town_damage':
-      towerDamage(ws, data);
-      break;
-
-    case 'barracks_damage':
-      barracksDamage(ws, data);
-      break;
-
-    case 'creep_damage':
-      creepDamage(ws, data);
-      break;
-
-    case 'respawn':
-      respawn(String(data.id || ''));
-      break;
-
-    default:
-
-      console.log(
-        '[SERVER] UNKNOWN TYPE:',
-        type
-      );
-
-      break;
+    return;
   }
+
+
+  // ==========================================================
+  // JOIN
+  // ==========================================================
+
+  if (type === 'join') {
+
+    join(ws, data);
+
+    return;
+  }
+
+
+  // ==========================================================
+  // MOVE
+  // ==========================================================
+
+  if (type === 'move') {
+
+    move(ws, data);
+
+    return;
+  }
+
+
+  // ==========================================================
+  // CHAT
+  // ==========================================================
+
+  if (type === 'chat') {
+
+    chat(ws, data);
+
+    return;
+  }
+
+
+  // ==========================================================
+  // LEVEL READY
+  // ==========================================================
+
+  if (type === 'level_ready') {
+
+    level_ready(ws);
+
+    return;
+  }
+
+
+  // ==========================================================
+  // FORCE START
+  // ==========================================================
+
+  if (type === 'force_start') {
+
+    force_start(ws);
+
+    return;
+  }
+
+
+  // ==========================================================
+  // PLAYER DAMAGE
+  // ==========================================================
+
+  if (type === 'player_damage') {
+
+    playerDamage(ws, data);
+
+    return;
+  }
+
+
+  // ==========================================================
+  // TOWN DAMAGE
+  // ==========================================================
+
+  if (type === 'town_damage') {
+
+    towerDamage(ws, data);
+
+    return;
+  }
+
+
+  // ==========================================================
+  // BARRACKS DAMAGE
+  // ==========================================================
+
+  if (type === 'barracks_damage') {
+
+    barracksDamage(ws, data);
+
+    return;
+  }
+
+
+  // ==========================================================
+  // CREEP DAMAGE
+  // ==========================================================
+
+  if (type === 'creep_damage') {
+
+    creepDamage(ws, data);
+
+    return;
+  }
+
+
+  // ==========================================================
+  // RESPAWN
+  // ==========================================================
+
+  if (type === 'respawn') {
+
+    respawn(
+      String(data.id || '')
+    );
+
+    return;
+  }
+
+
+  console.log(
+    '[SERVER] Неизвестный тип:',
+    type
+  );
+
 }
+
 
 // ============================================================
 // JOIN
@@ -570,15 +586,12 @@ function join(ws, data) {
     data.id || ''
   ).trim();
 
-  // ==========================================================
-  // ID CHECK
-  // ==========================================================
 
   if (!id) {
 
     send(ws, {
 
-      type: 'join_error',
+      type: 'error',
 
       message: 'ID отсутствует'
 
@@ -587,23 +600,9 @@ function join(ws, data) {
     return;
   }
 
-  // ==========================================================
-  // ALREADY JOINED ON THIS SOCKET
-  // ==========================================================
-
-  if (ws.playerData && ws.playerData.id === id) {
-
-    console.log(
-      `[JOIN] ${id} уже присоединён этим WebSocket`
-    );
-
-    sendPlayerList(ws);
-
-    return;
-  }
 
   // ==========================================================
-  // GAME CHECK
+  // НЕ ПОЗВОЛЯЕМ ВОЙТИ ВО ВРЕМЯ ИГРЫ
   // ==========================================================
 
   if (
@@ -613,7 +612,7 @@ function join(ws, data) {
 
     send(ws, {
 
-      type: 'join_error',
+      type: 'error',
 
       message: 'Игра уже началась'
 
@@ -621,6 +620,7 @@ function join(ws, data) {
 
     return;
   }
+
 
   // ==========================================================
   // MAX PLAYERS
@@ -633,7 +633,7 @@ function join(ws, data) {
 
     send(ws, {
 
-      type: 'join_error',
+      type: 'error',
 
       message: 'Лобби заполнено'
 
@@ -642,39 +642,24 @@ function join(ws, data) {
     return;
   }
 
+
   // ==========================================================
-  // SAME ID FROM ANOTHER SOCKET
+  // ID ЗАНЯТ
   // ==========================================================
 
   if (players.has(id)) {
 
-    const oldPlayer = players.get(id);
+    send(ws, {
 
-    console.log(
-      `[JOIN] ID ${id} уже существует`
-    );
+      type: 'error',
 
-    if (
-      oldPlayer &&
-      oldPlayer.ws &&
-      oldPlayer.ws !== ws &&
-      open(oldPlayer.ws)
-    ) {
+      message: 'ID занят'
 
-      console.log(
-        `[JOIN] Закрываем старое соединение ${id}`
-      );
+    });
 
-      try {
-
-        oldPlayer.ws.close();
-
-      } catch (_) {}
-
-    }
-
-    players.delete(id);
+    return;
   }
+
 
   // ==========================================================
   // TEAM
@@ -695,11 +680,13 @@ function join(ws, data) {
 
   });
 
+
   let team = 1;
 
   if (team1 > team2) {
     team = 2;
   }
+
 
   // ==========================================================
   // CHARACTER
@@ -710,21 +697,21 @@ function join(ws, data) {
       ? 2
       : 1;
 
+
   // ==========================================================
   // SPAWN
   // ==========================================================
 
   const position = spawn(team);
 
+
   // ==========================================================
-  // PLAYER
+  // CREATE PLAYER
   // ==========================================================
 
   const player = {
 
     id: id,
-
-    ws: ws,
 
     nickname: String(
       data.nickname || 'Player'
@@ -738,8 +725,6 @@ function join(ws, data) {
 
     flip: false,
 
-    animation: 'idle',
-
     team: team,
 
     hp: PLAYER_MAX_HP,
@@ -752,26 +737,27 @@ function join(ws, data) {
 
   };
 
-  players.set(id, player);
+
+  players.set(
+    id,
+    player
+  );
 
   ws.playerData = player;
 
-  // ==========================================================
-  // LOG
-  // ==========================================================
 
   console.log('');
   console.log('==========================================');
-  console.log('[JOIN SUCCESS]');
-  console.log('ID:', id);
-  console.log('Nickname:', player.nickname);
-  console.log('Character:', player.character);
-  console.log('Team:', player.team);
-  console.log('Spawn:', player.x, player.y);
-  console.log('Players:', players.size);
-  console.log('Sockets:', wss.clients.size);
+  console.log('[JOIN] НОВЫЙ ИГРОК');
+  console.log('[JOIN] ID:', id);
+  console.log('[JOIN] Nickname:', player.nickname);
+  console.log('[JOIN] Character:', player.character);
+  console.log('[JOIN] Team:', player.team);
+  console.log('[JOIN] Spawn:', player.x, player.y);
+  console.log('[JOIN] Players:', players.size);
   console.log('==========================================');
   console.log('');
+
 
   // ==========================================================
   // JOIN SUCCESS
@@ -783,17 +769,11 @@ function join(ws, data) {
 
     id: id,
 
-    nickname: player.nickname,
-
     team: team,
 
     x: player.x,
 
     y: player.y,
-
-    flip: player.flip,
-
-    animation: player.animation,
 
     character: player.character,
 
@@ -801,18 +781,19 @@ function join(ws, data) {
 
   });
 
+
   // ==========================================================
-  // IMPORTANT:
-  // SEND FULL LIST TO NEW PLAYER
+  // PLAYER LIST
   // ==========================================================
 
   sendPlayerList(ws);
 
+
   // ==========================================================
-  // SEND NEW PLAYER TO EVERY OLD PLAYER
+  // PLAYER JOINED
   // ==========================================================
 
-  broadcastToPlayers({
+  broadcast({
 
     type: 'player_joined',
 
@@ -828,24 +809,22 @@ function join(ws, data) {
 
     flip: player.flip,
 
-    animation: player.animation,
-
     team: player.team,
 
     hp: player.hp
 
   }, ws);
 
-  // ==========================================================
-  // FULL LIST TO EVERYONE
-  // ==========================================================
 
   broadcastPlayerList();
 
+
   console.log(
-    `[SYNC] ${id} joined. All players=${players.size}`
+    `[JOIN] ${id} полностью готов`
   );
+
 }
+
 
 // ============================================================
 // LEVEL READY
@@ -872,11 +851,13 @@ function level_ready(ws) {
   p.inGame = true;
 
   console.log(
-    `[READY] ${id} | ready=${readyCount()} players=${players.size}`
+    `[READY] ${id} готов | ready=${readyCount()} players=${players.size}`
   );
 
   checkAllReady();
+
 }
+
 
 // ============================================================
 // MOVE
@@ -909,17 +890,7 @@ function move(ws, data) {
 
   p.flip = !!data.flip;
 
-  let animation = String(
-    data.animation || 'idle'
-  );
-
-  if (animation.length > 32) {
-    animation = animation.slice(0, 32);
-  }
-
-  p.animation = animation;
-
-  broadcastToPlayers({
+  broadcast({
 
     type: 'player_moved',
 
@@ -929,57 +900,12 @@ function move(ws, data) {
 
     y: p.y,
 
-    flip: p.flip,
-
-    animation: p.animation
+    flip: p.flip
 
   }, ws);
+
 }
 
-// ============================================================
-// ANIMATION ONLY
-// ============================================================
-
-function animation(ws, data) {
-
-  const id = ws.playerData?.id;
-
-  if (!id) {
-    return;
-  }
-
-  const p = players.get(id);
-
-  if (!p || p.isDead) {
-    return;
-  }
-
-  let animationName = String(
-    data.animation || 'idle'
-  );
-
-  if (animationName.length > 32) {
-    animationName = animationName.slice(0, 32);
-  }
-
-  p.animation = animationName;
-
-  broadcastToPlayers({
-
-    type: 'player_moved',
-
-    id: p.id,
-
-    x: p.x,
-
-    y: p.y,
-
-    flip: p.flip,
-
-    animation: p.animation
-
-  }, ws);
-}
 
 // ============================================================
 // CHAT
@@ -1012,7 +938,9 @@ function chat(ws, data) {
     message: message.slice(0, 300)
 
   });
+
 }
+
 
 // ============================================================
 // READY CHECK
@@ -1033,11 +961,13 @@ function checkAllReady() {
   }
 
   console.log(
-    '[GAME] ALL PLAYERS READY'
+    '[GAME] Все готовы. Запускаем countdown на 60 секунд.'
   );
 
   startCountdown();
+
 }
+
 
 // ============================================================
 // COUNTDOWN
@@ -1065,6 +995,11 @@ function startCountdown() {
 
   });
 
+  console.log(
+    `[GAME] Countdown started: ${state.countdown} seconds`
+  );
+
+
   countdownTimer = setInterval(() => {
 
     if (state.status !== 'countdown') {
@@ -1080,6 +1015,10 @@ function startCountdown() {
       players.size < MIN_PLAYERS ||
       readyCount() < MIN_PLAYERS
     ) {
+
+      console.log(
+        '[GAME] Недостаточно игроков. Countdown отменён.'
+      );
 
       cancelCountdown();
 
@@ -1103,10 +1042,13 @@ function startCountdown() {
       countdownTimer = null;
 
       startGame();
+
     }
 
   }, 1000);
+
 }
+
 
 // ============================================================
 // CANCEL COUNTDOWN
@@ -1121,6 +1063,7 @@ function cancelCountdown() {
     );
 
     countdownTimer = null;
+
   }
 
   state.status = 'lobby';
@@ -1132,7 +1075,13 @@ function cancelCountdown() {
     type: 'countdown_cancel'
 
   });
+
+  console.log(
+    '[GAME] Countdown отменён'
+  );
+
 }
+
 
 // ============================================================
 // FORCE START
@@ -1162,7 +1111,9 @@ function force_start(ws) {
   });
 
   startCountdown();
+
 }
+
 
 // ============================================================
 // START GAME
@@ -1181,7 +1132,10 @@ function startGame() {
 
   state.timer = GAME_TIME;
 
-  state.winner = 0;
+
+  // ==========================================================
+  // RESET PLAYER HP / REGEN STATE
+  // ==========================================================
 
   const now = Date.now();
 
@@ -1191,21 +1145,29 @@ function startGame() {
 
     p.isDead = false;
 
-    p.animation = 'idle';
-
     p.lastDamageTime = now;
 
   });
 
+
   const data = playersObject();
 
+
   // ==========================================================
-  // INIT GAME INDIVIDUALLY
+  // INIT GAME
   // ==========================================================
 
-  players.forEach(p => {
+  wss.clients.forEach(ws => {
 
-    send(p.ws, {
+    const id = ws.playerData?.id;
+
+    const p = players.get(id);
+
+    if (!p) {
+      return;
+    }
+
+    send(ws, {
 
       type: 'init_game',
 
@@ -1231,8 +1193,9 @@ function startGame() {
 
   });
 
+
   // ==========================================================
-  // START
+  // GAME START
   // ==========================================================
 
   broadcast({
@@ -1240,6 +1203,11 @@ function startGame() {
     type: 'start_game'
 
   });
+
+
+  // ==========================================================
+  // GAME TIMER DISPLAY
+  // ==========================================================
 
   broadcast({
 
@@ -1249,8 +1217,9 @@ function startGame() {
 
   });
 
+
   // ==========================================================
-  // TIMERS
+  // CLEAR OLD TIMERS
   // ==========================================================
 
   clearInterval(gameTimer);
@@ -1258,10 +1227,12 @@ function startGame() {
   clearInterval(creepTimer);
   clearInterval(playerRegenTimer);
 
+
   gameTimer = null;
   playerCheckTimer = null;
   creepTimer = null;
   playerRegenTimer = null;
+
 
   // ==========================================================
   // GAME TIMER
@@ -1292,6 +1263,10 @@ function startGame() {
 
     });
 
+    console.log(
+      `[GAME TIMER] ${formatTime(state.timer)}`
+    );
+
     if (state.timer <= 0) {
 
       clearInterval(gameTimer);
@@ -1304,6 +1279,7 @@ function startGame() {
 
   }, 1000);
 
+
   // ==========================================================
   // PLAYER CHECK
   // ==========================================================
@@ -1313,8 +1289,9 @@ function startGame() {
     3000
   );
 
+
   // ==========================================================
-  // REGEN
+  // SERVER PLAYER REGEN
   // ==========================================================
 
   playerRegenTimer = setInterval(
@@ -1322,26 +1299,34 @@ function startGame() {
     PLAYER_REGEN_INTERVAL
   );
 
+
   // ==========================================================
   // CREEPS
   // ==========================================================
 
   creepTimer = setInterval(
     spawnCreep,
-    CREEP_SPAWN_INTERVAL
+    5000
   );
 
+
   console.log('');
   console.log('==========================================');
-  console.log('[GAME] GAME STARTED');
-  console.log('[GAME] PLAYERS:', players.size);
-  console.log('[GAME] TIMER:', formatTime(state.timer));
+  console.log('[GAME] ИГРА НАЧАЛАСЬ');
+  console.log('[GAME] Длительность:', GAME_TIME, 'секунд');
+  console.log('[GAME] Длительность:', GAME_TIME / 60, 'минут');
+  console.log('[GAME] Таймер:', formatTime(state.timer));
+  console.log('[GAME] SERVER HP REGEN ENABLED');
+  console.log('[GAME] REGEN:', PLAYER_REGEN_AMOUNT, 'HP');
+  console.log('[GAME] REGEN DELAY:', PLAYER_REGEN_DELAY, 'ms');
   console.log('==========================================');
   console.log('');
+
 }
 
+
 // ============================================================
-// PLAYER REGEN
+// SERVER PLAYER REGENERATION
 // ============================================================
 
 function regeneratePlayers() {
@@ -1354,9 +1339,17 @@ function regeneratePlayers() {
 
   players.forEach(p => {
 
+    // --------------------------------------------------------
+    // Мёртвые игроки не регенятся
+    // --------------------------------------------------------
+
     if (p.isDead) {
       return;
     }
+
+    // --------------------------------------------------------
+    // Уже полное HP
+    // --------------------------------------------------------
 
     if (p.hp >= PLAYER_MAX_HP) {
 
@@ -1365,14 +1358,26 @@ function regeneratePlayers() {
       return;
     }
 
+    // --------------------------------------------------------
+    // Сколько прошло после последнего урона
+    // --------------------------------------------------------
+
     const elapsed =
       now - Number(
         p.lastDamageTime || now
       );
 
+    // --------------------------------------------------------
+    // Ждём 3 секунды после урона
+    // --------------------------------------------------------
+
     if (elapsed < PLAYER_REGEN_DELAY) {
       return;
     }
+
+    // --------------------------------------------------------
+    // РЕГЕН
+    // --------------------------------------------------------
 
     const oldHp = p.hp;
 
@@ -1385,6 +1390,14 @@ function regeneratePlayers() {
       return;
     }
 
+    console.log(
+      `[REGEN] ${p.id}: ${oldHp} -> ${p.hp}`
+    );
+
+    // --------------------------------------------------------
+    // ОТПРАВЛЯЕМ HP ВСЕМ КЛИЕНТАМ
+    // --------------------------------------------------------
+
     broadcast({
 
       type: 'player_damage',
@@ -1396,7 +1409,9 @@ function regeneratePlayers() {
     });
 
   });
+
 }
+
 
 // ============================================================
 // FORMAT TIME
@@ -1423,10 +1438,12 @@ function formatTime(seconds) {
     ':' +
     String(secs).padStart(2, '0')
   );
+
 }
 
+
 // ============================================================
-// CREEP SPAWN
+// SPAWN CREEP
 // ============================================================
 
 function spawnCreep() {
@@ -1450,7 +1467,7 @@ function spawnCreep() {
 
     team: team,
 
-    hp: CREEP_MAX_HP,
+    hp: 80,
 
     x:
       team === 1
@@ -1461,7 +1478,9 @@ function spawnCreep() {
 
   };
 
-  state.creeps.push(creep);
+  state.creeps.push(
+    creep
+  );
 
   broadcast({
 
@@ -1470,7 +1489,9 @@ function spawnCreep() {
     creep: creep
 
   });
+
 }
+
 
 // ============================================================
 // PLAYER DAMAGE
@@ -1498,17 +1519,33 @@ function playerDamage(_, data) {
       Number(data.damage) || 10
     );
 
+  // ==========================================================
+  // DAMAGE
+  // ==========================================================
+
   p.hp =
     Math.max(
       0,
       p.hp - damage
     );
 
+
+  // ==========================================================
+  // ВАЖНО:
+  // КАЖДЫЙ УРОН ПЕРЕЗАПУСКАЕТ ТАЙМЕР РЕГЕНА
+  // ==========================================================
+
   p.lastDamageTime = Date.now();
+
 
   console.log(
     `[DAMAGE] ${p.id}: -${damage} HP=${p.hp}`
   );
+
+
+  // ==========================================================
+  // SYNC HP
+  // ==========================================================
 
   broadcast({
 
@@ -1520,6 +1557,7 @@ function playerDamage(_, data) {
 
   });
 
+
   // ==========================================================
   // DEATH
   // ==========================================================
@@ -1530,7 +1568,13 @@ function playerDamage(_, data) {
 
     p.isDead = true;
 
-    p.animation = 'death';
+    p.lastDamageTime = Date.now();
+
+
+    console.log(
+      `[DEATH] ${p.id}`
+    );
+
 
     broadcast({
 
@@ -1542,25 +1586,10 @@ function playerDamage(_, data) {
 
     });
 
-    broadcast({
 
-      type: 'player_moved',
-
-      id: p.id,
-
-      x: p.x,
-
-      y: p.y,
-
-      flip: p.flip,
-
-      animation: 'death'
-
-    });
-
-    console.log(
-      `[DEATH] ${p.id}`
-    );
+    // ========================================================
+    // SERVER CONTROLLED RESPAWN
+    // ========================================================
 
     setTimeout(() => {
 
@@ -1584,8 +1613,11 @@ function playerDamage(_, data) {
       );
 
     }, 3000);
+
   }
+
 }
+
 
 // ============================================================
 // RESPAWN
@@ -1606,15 +1638,25 @@ function respawn(id) {
     return;
   }
 
+  // ==========================================================
+  // НЕ ВОЗРОЖДАЕМ ЖИВОГО
+  // ==========================================================
+
   if (!p.isDead) {
     return;
   }
+
 
   const position =
     spawn(
       p.team,
       true
     );
+
+
+  // ==========================================================
+  // НОВАЯ ЖИЗНЬ
+  // ==========================================================
 
   p.hp = PLAYER_MAX_HP;
 
@@ -1626,9 +1668,22 @@ function respawn(id) {
 
   p.flip = false;
 
-  p.animation = 'idle';
+
+  // ==========================================================
+  // РЕГЕН НЕ НАЧИНАЕТСЯ СРАЗУ
+  // ==========================================================
 
   p.lastDamageTime = Date.now();
+
+
+  console.log(
+    `[RESPAWN] ${p.id} | HP=${p.hp} | position=${p.x},${p.y}`
+  );
+
+
+  // ==========================================================
+  // ОТПРАВЛЯЕМ ВОЗРОЖДЕНИЕ
+  // ==========================================================
 
   broadcast({
 
@@ -1644,22 +1699,23 @@ function respawn(id) {
 
   });
 
+
+  // ==========================================================
+  // ДОПОЛНИТЕЛЬНО СИНХРОНИЗИРУЕМ HP
+  // ==========================================================
+
   broadcast({
 
-    type: 'player_moved',
+    type: 'player_damage',
 
-    id: p.id,
+    target_id: p.id,
 
-    x: p.x,
-
-    y: p.y,
-
-    flip: false,
-
-    animation: 'idle'
+    new_hp: p.hp
 
   });
+
 }
+
 
 // ============================================================
 // TOWER DAMAGE
@@ -1712,8 +1768,11 @@ function towerDamage(_, data) {
         ? 2
         : 1
     );
+
   }
+
 }
+
 
 // ============================================================
 // BARRACKS DAMAGE
@@ -1781,8 +1840,11 @@ function barracksDamage(_, data) {
           : 2
 
     });
+
   }
+
 }
+
 
 // ============================================================
 // CREEP DAMAGE
@@ -1844,8 +1906,11 @@ function creepDamage(_, data) {
       id: creep.id
 
     });
+
   }
+
 }
+
 
 // ============================================================
 // CHECK PLAYERS
@@ -1869,8 +1934,11 @@ function checkPlayers() {
         ? remaining.team
         : 0
     );
+
   }
+
 }
+
 
 // ============================================================
 // END GAME
@@ -1888,6 +1956,11 @@ function endGame(winner) {
 
   state.timer = 0;
 
+
+  // ==========================================================
+  // STOP TIMERS
+  // ==========================================================
+
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
@@ -1898,6 +1971,11 @@ function endGame(winner) {
   creepTimer = null;
   playerRegenTimer = null;
 
+
+  // ==========================================================
+  // SHOW 00:00
+  // ==========================================================
+
   broadcast({
 
     type: 'countdown_update',
@@ -1906,10 +1984,12 @@ function endGame(winner) {
 
   });
 
+
   const result =
     winner === 0
       ? 'НИЧЬЯ!'
       : `ПОБЕДА КОМАНДЫ ${winner}!`;
+
 
   broadcast({
 
@@ -1921,6 +2001,7 @@ function endGame(winner) {
 
   });
 
+
   broadcast({
 
     type: 'game_over',
@@ -1928,6 +2009,7 @@ function endGame(winner) {
     winner_team: winner
 
   });
+
 
   broadcast({
 
@@ -1937,11 +2019,22 @@ function endGame(winner) {
 
   });
 
+
+  console.log('');
+  console.log('==========================================');
+  console.log('[GAME] ИГРА ЗАКОНЧЕНА');
+  console.log('[GAME] WINNER:', winner);
+  console.log('==========================================');
+  console.log('');
+
+
   setTimeout(
     resetGame,
     5000
   );
+
 }
+
 
 // ============================================================
 // RESET GAME
@@ -1973,13 +2066,12 @@ function resetGame() {
 
       flip: false,
 
-      animation: 'idle',
-
       lastDamageTime: Date.now()
 
     });
 
   });
+
 
   broadcast({
 
@@ -1987,12 +2079,16 @@ function resetGame() {
 
   });
 
+
   broadcastPlayerList();
 
+
   console.log(
-    '[GAME] LOBBY RESET'
+    '[GAME] Лобби сброшено'
   );
+
 }
+
 
 // ============================================================
 // DISCONNECT
@@ -2007,24 +2103,7 @@ function disconnect(ws) {
     return;
   }
 
-  const player =
-    players.get(id);
-
-  if (!player) {
-    return;
-  }
-
-  // ==========================================================
-  // IMPORTANT:
-  // Не удаляем нового игрока старым сокетом
-  // ==========================================================
-
-  if (player.ws !== ws) {
-
-    console.log(
-      `[DISCONNECT] OLD SOCKET IGNORED: ${id}`
-    );
-
+  if (!players.has(id)) {
     return;
   }
 
@@ -2044,6 +2123,11 @@ function disconnect(ws) {
 
   broadcastPlayerList();
 
+
+  // ==========================================================
+  // CANCEL COUNTDOWN
+  // ==========================================================
+
   if (
     state.status === 'countdown' &&
     (
@@ -2053,19 +2137,32 @@ function disconnect(ws) {
   ) {
 
     cancelCountdown();
+
   }
+
+
+  // ==========================================================
+  // CHECK GAME
+  // ==========================================================
 
   if (state.status === 'playing') {
 
     checkPlayers();
+
   }
+
 }
 
+
 // ============================================================
-// STOP TIMERS
+// PROCESS EXIT
 // ============================================================
 
-function stopTimers() {
+process.on('SIGINT', () => {
+
+  console.log(
+    '[SERVER] Остановка...'
+  );
 
   clearInterval(countdownTimer);
   clearInterval(gameTimer);
@@ -2078,22 +2175,11 @@ function stopTimers() {
   playerCheckTimer = null;
   creepTimer = null;
   playerRegenTimer = null;
-}
-
-// ============================================================
-// PROCESS EXIT
-// ============================================================
-
-process.on('SIGINT', () => {
-
-  console.log(
-    '[SERVER] STOP'
-  );
-
-  stopTimers();
 
   process.exit(0);
+
 });
+
 
 process.on('SIGTERM', () => {
 
@@ -2101,7 +2187,12 @@ process.on('SIGTERM', () => {
     '[SERVER] SIGTERM'
   );
 
-  stopTimers();
+  clearInterval(countdownTimer);
+  clearInterval(gameTimer);
+  clearInterval(playerCheckTimer);
+  clearInterval(creepTimer);
+  clearInterval(playerRegenTimer);
 
   process.exit(0);
+
 });
