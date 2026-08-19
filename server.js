@@ -17,26 +17,31 @@ const GAME_TIME = 600;
 // ANIMATION SYNC SETTINGS
 // ============================================================
 
-// Интервал синхронизации анимаций (ms)
 const ANIMATION_SYNC_INTERVAL = 50;
 
 // ============================================================
 // PLAYER HP / REGEN SETTINGS
 // ============================================================
 
-// Максимальное HP игрока
 const PLAYER_MAX_HP = 100;
-
-// Через сколько миллисекунд после последнего урона
-// начинается регенерация.
 const PLAYER_REGEN_DELAY = 3000;
-
-// Сколько HP восстанавливать за один тик.
 const PLAYER_REGEN_AMOUNT = 5;
-
-// Интервал регенерации.
 const PLAYER_REGEN_INTERVAL = 500;
 
+// ============================================================
+// CREEP SETTINGS
+// ============================================================
+
+const CREEP_SPAWN_INTERVAL = 5000;
+const CREEP_MAX_HP = 80;
+const CREEP_SPEED = 80;
+const CREEP_DAMAGE = 20;
+const CREEP_ATTACK_RANGE = 80;
+const CREEP_ATTACK_COOLDOWN = 1000;
+const CREEP_BARRACKS_ATTACK_RANGE = 160;
+const CREEP_SEARCH_RANGE = 380;
+const CREEP_UPDATE_INTERVAL = 50;
+const CREEP_SYNC_INTERVAL = 100; // Полная синхронизация каждые 100мс
 
 // ============================================================
 // PLAYERS / STATE
@@ -51,7 +56,8 @@ let playerCheckTimer = null;
 let creepTimer = null;
 let playerRegenTimer = null;
 let animationSyncTimer = null;
-
+let creepUpdateTimer = null;
+let creepSyncTimer = null;
 
 // ============================================================
 // STATE
@@ -84,16 +90,16 @@ function resetState() {
 
     nextCreepId: 1,
 
-    // Синхронизация анимаций
     animationTick: 0,
-    animations: []
+    animations: [],
+    
+    lastCreepUpdate: null
 
   });
 
 }
 
 resetState();
-
 
 // ============================================================
 // HTTP SERVER
@@ -121,7 +127,6 @@ const server = http.createServer((req, res) => {
 
 });
 
-
 // ============================================================
 // WEBSOCKET
 // ============================================================
@@ -130,7 +135,6 @@ const wss = new WebSocket.Server({
   server: server,
   maxPayload: 1024 * 1024
 });
-
 
 // ============================================================
 // START SERVER
@@ -153,12 +157,23 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('PLAYER REGEN:', PLAYER_REGEN_AMOUNT, 'HP');
   console.log('PLAYER REGEN INTERVAL:', PLAYER_REGEN_INTERVAL, 'ms');
   console.log('');
+  console.log('CREEP SETTINGS:');
+  console.log('  SPAWN INTERVAL:', CREEP_SPAWN_INTERVAL, 'ms');
+  console.log('  MAX HP:', CREEP_MAX_HP);
+  console.log('  SPEED:', CREEP_SPEED);
+  console.log('  DAMAGE:', CREEP_DAMAGE);
+  console.log('  ATTACK RANGE:', CREEP_ATTACK_RANGE);
+  console.log('  ATTACK COOLDOWN:', CREEP_ATTACK_COOLDOWN, 'ms');
+  console.log('  BARRACKS ATTACK RANGE:', CREEP_BARRACKS_ATTACK_RANGE);
+  console.log('  SEARCH RANGE:', CREEP_SEARCH_RANGE);
+  console.log('  UPDATE INTERVAL:', CREEP_UPDATE_INTERVAL, 'ms');
+  console.log('  SYNC INTERVAL:', CREEP_SYNC_INTERVAL, 'ms');
+  console.log('');
   console.log('ANIMATION SYNC INTERVAL:', ANIMATION_SYNC_INTERVAL, 'ms');
   console.log('==========================================');
   console.log('');
 
 });
-
 
 // ============================================================
 // KEEP ALIVE
@@ -167,11 +182,10 @@ server.listen(PORT, '0.0.0.0', () => {
 setInterval(() => {
 
   console.log(
-    `[SERVER] alive | players=${players.size} | status=${state.status} | timer=${state.timer} | animTick=${state.animationTick}`
+    `[SERVER] alive | players=${players.size} | status=${state.status} | timer=${state.timer} | creeps=${state.creeps.length} | animTick=${state.animationTick}`
   );
 
 }, 30000);
-
 
 // ============================================================
 // HELPERS
@@ -185,7 +199,6 @@ function open(ws) {
   );
 
 }
-
 
 function send(ws, message) {
 
@@ -210,7 +223,6 @@ function send(ws, message) {
 
 }
 
-
 function broadcast(message, exclude = null) {
 
   const json = JSON.stringify(message);
@@ -234,7 +246,6 @@ function broadcast(message, exclude = null) {
 
 }
 
-
 function spawn(team, respawn = false) {
 
   return {
@@ -250,7 +261,6 @@ function spawn(team, respawn = false) {
   };
 
 }
-
 
 function playersObject() {
 
@@ -284,7 +294,6 @@ function playersObject() {
 
 }
 
-
 function sendPlayerList(ws) {
 
   send(ws, {
@@ -297,7 +306,6 @@ function sendPlayerList(ws) {
 
 }
 
-
 function broadcastPlayerList() {
 
   broadcast({
@@ -309,7 +317,6 @@ function broadcastPlayerList() {
   });
 
 }
-
 
 function readyCount() {
 
@@ -327,7 +334,6 @@ function readyCount() {
 
 }
 
-
 // ============================================================
 // ANIMATION SYNC HELPERS
 // ============================================================
@@ -338,7 +344,6 @@ function syncAnimation(animData) {
     return null;
   }
 
-  // Создаем объект анимации
   const animation = {
     id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     tick: state.animationTick,
@@ -349,14 +354,12 @@ function syncAnimation(animData) {
     targetId: animData.targetId || ''
   };
 
-  // Сохраняем в истории (максимум 100 последних)
   state.animations.push(animation);
   
   if (state.animations.length > 100) {
     state.animations.shift();
   }
 
-  // Отправляем всем клиентам
   broadcast({
     type: 'animation_sync',
     animation: animation
@@ -374,6 +377,468 @@ function broadcastAnimation(type, data, sourceId = '', targetId = '') {
   });
 }
 
+// ============================================================
+// CREEP HELPERS
+// ============================================================
+
+function getCreepData(creep) {
+  return {
+    id: creep.id,
+    team: creep.team,
+    hp: creep.hp,
+    maxHp: creep.maxHp,
+    x: creep.x,
+    y: creep.y,
+    targetId: creep.targetId,
+    isAttacking: creep.isAttacking,
+    isDead: creep.isDead,
+    speed: creep.speed,
+    damage: creep.damage,
+    attackRange: creep.attackRange,
+    barracksAttackRange: creep.barracksAttackRange,
+    direction: creep.direction,
+    animation: creep.animation
+  };
+}
+
+function getAllCreepsData() {
+  return state.creeps.map(creep => getCreepData(creep));
+}
+
+function broadcastCreepUpdate(creep) {
+  broadcast({
+    type: 'creep_update',
+    creep: getCreepData(creep)
+  });
+}
+
+function broadcastAllCreeps() {
+  broadcast({
+    type: 'creeps_sync',
+    creeps: getAllCreepsData()
+  });
+}
+
+function calculateDistance(obj1, obj2) {
+  return Math.sqrt(
+    Math.pow(obj1.x - obj2.x, 2) + 
+    Math.pow(obj1.y - obj2.y, 2)
+  );
+}
+
+function getAttackRangeForCreep(creep, target) {
+  if (target.type === 'barracks') {
+    return creep.barracksAttackRange;
+  }
+  return creep.attackRange;
+}
+
+function findTargetForCreep(creep) {
+  const targets = [];
+  
+  // Игроки
+  players.forEach((player, playerId) => {
+    if (player.team !== creep.team && !player.isDead) {
+      targets.push({
+        id: playerId,
+        type: 'player',
+        x: player.x,
+        y: player.y,
+        team: player.team,
+        priority: 1
+      });
+    }
+  });
+  
+  // Крипы противника
+  state.creeps.forEach(otherCreep => {
+    if (otherCreep.team !== creep.team && !otherCreep.isDead && otherCreep.id !== creep.id) {
+      targets.push({
+        id: otherCreep.id,
+        type: 'creep',
+        x: otherCreep.x,
+        y: otherCreep.y,
+        team: otherCreep.team,
+        priority: 2
+      });
+    }
+  });
+  
+  // Казармы
+  if (creep.team === 1 && !state.redBarracksDestroyed) {
+    targets.push({
+      id: 'red_barracks',
+      type: 'barracks',
+      x: 1500,
+      y: 450,
+      team: 2,
+      priority: 3
+    });
+  } else if (creep.team === 2 && !state.blueBarracksDestroyed) {
+    targets.push({
+      id: 'blue_barracks',
+      type: 'barracks',
+      x: -1500,
+      y: 450,
+      team: 1,
+      priority: 3
+    });
+  }
+  
+  // Башни
+  if (creep.team === 1) {
+    targets.push({
+      id: 'red_tower',
+      type: 'tower',
+      x: 2690,
+      y: 450,
+      team: 2,
+      priority: 4
+    });
+  } else {
+    targets.push({
+      id: 'blue_tower',
+      type: 'tower',
+      x: -1500,
+      y: 450,
+      team: 1,
+      priority: 4
+    });
+  }
+  
+  // Сортируем по приоритету и расстоянию
+  targets.sort((a, b) => {
+    if (a.priority !== b.priority) {
+      return a.priority - b.priority;
+    }
+    const distA = calculateDistance(creep, a);
+    const distB = calculateDistance(creep, b);
+    return distA - distB;
+  });
+  
+  // Возвращаем ближайшую цель в пределах радиуса поиска
+  for (const target of targets) {
+    const distance = calculateDistance(creep, target);
+    if (distance <= creep.searchRange) {
+      return target;
+    }
+  }
+  
+  return null;
+}
+
+function moveCreepTowards(creep, target, deltaTime) {
+  const dx = target.x - creep.x;
+  const dy = target.y - creep.y;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+  
+  if (distance > 0) {
+    const moveX = (dx / distance) * creep.speed * deltaTime;
+    const moveY = (dy / distance) * creep.speed * deltaTime;
+    
+    creep.x += moveX;
+    creep.y += moveY;
+    
+    // Обновляем направление для анимации
+    creep.direction = dx > 0 ? 1 : -1;
+  }
+}
+
+function dealCreepDamage(creep, target) {
+  // Наносим урон цели
+  if (target.type === 'player') {
+    const player = players.get(target.id);
+    if (player && !player.isDead) {
+      player.hp = Math.max(0, player.hp - creep.damage);
+      player.lastDamageTime = Date.now();
+      
+      broadcast({
+        type: 'player_damage',
+        target_id: player.id,
+        new_hp: player.hp
+      });
+      
+      if (player.hp <= 0) {
+        player.isDead = true;
+        
+        broadcast({
+          type: 'player_damage',
+          target_id: player.id,
+          new_hp: 0
+        });
+        
+        // Автоматический респавн игрока
+        setTimeout(() => {
+          const currentPlayer = players.get(player.id);
+          if (currentPlayer && currentPlayer.isDead && state.status === 'playing') {
+            respawn(currentPlayer.id);
+          }
+        }, 3000);
+      }
+    }
+  } else if (target.type === 'creep') {
+    const targetCreep = state.creeps.find(c => c.id === target.id);
+    if (targetCreep && !targetCreep.isDead) {
+      targetCreep.hp = Math.max(0, targetCreep.hp - creep.damage);
+      
+      broadcast({
+        type: 'creep_damage',
+        id: targetCreep.id,
+        new_hp: targetCreep.hp
+      });
+      
+      if (targetCreep.hp <= 0) {
+        targetCreep.isDead = true;
+      }
+    }
+  } else if (target.type === 'barracks') {
+    if (target.team === 1) {
+      state.blueBarracksHp = Math.max(0, state.blueBarracksHp - creep.damage);
+      
+      broadcast({
+        type: 'barracks_damage',
+        barracks_id: 1,
+        new_hp: state.blueBarracksHp
+      });
+      
+      if (state.blueBarracksHp <= 0 && !state.blueBarracksDestroyed) {
+        state.blueBarracksDestroyed = true;
+        broadcast({
+          type: 'barracks_destroyed',
+          barracks_id: 1
+        });
+      }
+    } else {
+      state.redBarracksHp = Math.max(0, state.redBarracksHp - creep.damage);
+      
+      broadcast({
+        type: 'barracks_damage',
+        barracks_id: 2,
+        new_hp: state.redBarracksHp
+      });
+      
+      if (state.redBarracksHp <= 0 && !state.redBarracksDestroyed) {
+        state.redBarracksDestroyed = true;
+        broadcast({
+          type: 'barracks_destroyed',
+          barracks_id: 2
+        });
+      }
+    }
+  } else if (target.type === 'tower') {
+    if (target.team === 1) {
+      state.blueTowerHp = Math.max(0, state.blueTowerHp - creep.damage);
+      
+      broadcast({
+        type: 'tower_damage',
+        town_id: 1,
+        new_hp: state.blueTowerHp
+      });
+      
+      if (state.blueTowerHp <= 0) {
+        endGame(2);
+      }
+    } else {
+      state.redTowerHp = Math.max(0, state.redTowerHp - creep.damage);
+      
+      broadcast({
+        type: 'tower_damage',
+        town_id: 2,
+        new_hp: state.redTowerHp
+      });
+      
+      if (state.redTowerHp <= 0) {
+        endGame(1);
+      }
+    }
+  }
+}
+
+// ============================================================
+// UPDATE CREEPS (SERVER AUTHORITATIVE)
+// ============================================================
+
+function updateCreeps() {
+  if (state.status !== 'playing') {
+    return;
+  }
+
+  const now = Date.now();
+  const deltaTime = (now - (state.lastCreepUpdate || now)) / 1000;
+  state.lastCreepUpdate = now;
+
+  const creepsToRemove = [];
+
+  state.creeps.forEach(creep => {
+    if (creep.isDead) {
+      creepsToRemove.push(creep);
+      return;
+    }
+
+    // Обновляем кулдаун атаки
+    if (creep.attackCooldown > 0) {
+      creep.attackCooldown = Math.max(0, creep.attackCooldown - (deltaTime * 1000));
+    }
+
+    // Находим цель
+    const target = findTargetForCreep(creep);
+    
+    if (target) {
+      creep.targetId = target.id;
+      
+      const distance = calculateDistance(creep, target);
+      const attackRange = getAttackRangeForCreep(creep, target);
+      
+      if (distance <= attackRange) {
+        // Атакуем цель
+        if (creep.attackCooldown <= 0 && !creep.isAttacking) {
+          creep.isAttacking = true;
+          creep.attackCooldown = CREEP_ATTACK_COOLDOWN;
+          creep.animation = 'attack';
+          
+          // Наносим урон цели
+          dealCreepDamage(creep, target);
+          
+          // Сбрасываем атаку через 500мс
+          setTimeout(() => {
+            if (creep && !creep.isDead) {
+              creep.isAttacking = false;
+              creep.animation = 'run';
+            }
+          }, 500);
+        }
+      } else {
+        // Двигаемся к цели
+        moveCreepTowards(creep, target, deltaTime);
+        creep.isAttacking = false;
+        creep.animation = 'run';
+      }
+    } else {
+      // Нет цели - движемся к базе противника
+      creep.targetId = null;
+      creep.isAttacking = false;
+      creep.animation = 'run';
+      
+      // Автоматическое движение к базе противника
+      creep.x += creep.direction * creep.speed * deltaTime;
+      
+      // Проверяем достижение базы
+      if (creep.team === 1 && creep.x >= 2590) {
+        // Достигли базы команды 2
+        const towerTarget = {
+          id: 'red_tower',
+          type: 'tower',
+          x: 2690,
+          y: 450,
+          team: 2
+        };
+        dealCreepDamage(creep, towerTarget);
+        creepsToRemove.push(creep);
+        creep.isDead = true;
+      } else if (creep.team === 2 && creep.x <= -1400) {
+        // Достигли базы команды 1
+        const towerTarget = {
+          id: 'blue_tower',
+          type: 'tower',
+          x: -1500,
+          y: 450,
+          team: 1
+        };
+        dealCreepDamage(creep, towerTarget);
+        creepsToRemove.push(creep);
+        creep.isDead = true;
+      }
+    }
+  });
+
+  // Удаляем мертвых крипов
+  creepsToRemove.forEach(creep => {
+    state.creeps = state.creeps.filter(c => c.id !== creep.id);
+    
+    broadcast({
+      type: 'creep_destroy',
+      id: creep.id
+    });
+    
+    broadcastAnimation(
+      'creep_destroy',
+      { creep_id: creep.id },
+      '',
+      ''
+    );
+  });
+}
+
+// ============================================================
+// SPAWN CREEP
+// ============================================================
+
+function spawnCreep() {
+  if (state.status !== 'playing') {
+    return;
+  }
+
+  // Проверяем, не уничтожены ли казармы
+  const team = state.nextCreepTeam;
+  
+  // Если казармы команды уничтожены, пропускаем спавн
+  if (team === 1 && state.blueBarracksDestroyed) {
+    state.nextCreepTeam = 2;
+    return;
+  }
+  
+  if (team === 2 && state.redBarracksDestroyed) {
+    state.nextCreepTeam = 1;
+    return;
+  }
+
+  // Создаем крипа
+  const creep = {
+    id: `creep_${state.nextCreepId++}`,
+    team: team,
+    hp: CREEP_MAX_HP,
+    maxHp: CREEP_MAX_HP,
+    x: team === 1 ? -1400 : 2590,
+    y: 450,
+    targetId: null,
+    isAttacking: false,
+    attackCooldown: 0,
+    isDead: false,
+    speed: CREEP_SPEED,
+    damage: CREEP_DAMAGE,
+    attackRange: CREEP_ATTACK_RANGE,
+    barracksAttackRange: CREEP_BARRACKS_ATTACK_RANGE,
+    searchRange: CREEP_SEARCH_RANGE,
+    direction: team === 1 ? 1 : -1,
+    animation: 'run',
+    lastUpdateTime: Date.now()
+  };
+
+  state.creeps.push(creep);
+  
+  // Переключаем команду для следующего спавна
+  state.nextCreepTeam = team === 1 ? 2 : 1;
+
+  // Отправляем спавн крипа всем клиентам
+  broadcast({
+    type: 'creep_spawn',
+    creep: getCreepData(creep)
+  });
+
+  // Синхронизация анимации спавна
+  broadcastAnimation(
+    'creep_spawn',
+    { 
+      creep_id: creep.id, 
+      position: { x: creep.x, y: creep.y },
+      team: creep.team 
+    },
+    '',
+    ''
+  );
+
+  console.log(`[CREEP] Спавн крипа ${creep.id} для команды ${team}`);
+}
 
 // ============================================================
 // CONNECTION
@@ -384,2011 +849,877 @@ wss.on('connection', ws => {
   console.log('[WS] Новое WebSocket подключение');
 
   ws.playerData = {
-
     id: '',
-
     nickname: 'Player',
-
     character: 1,
-
     x: 0,
-
     y: 500,
-
     flip: false,
-
     team: 0,
-
     hp: PLAYER_MAX_HP,
-
     isDead: false,
-
     inGame: false,
-
     lastDamageTime: Date.now()
-
   };
 
-
-  // ==========================================================
-  // MESSAGE
-  // ==========================================================
-
   ws.on('message', raw => {
-
     try {
-
       const text = raw.toString();
-
-      if (!text) {
-        return;
-      }
-
+      if (!text) return;
       const data = JSON.parse(text);
-
       route(ws, data);
-
     } catch (error) {
-
-      console.log(
-        '[WS] Ошибка обработки сообщения:',
-        error.message
-      );
-
+      console.log('[WS] Ошибка обработки сообщения:', error.message);
       send(ws, {
-
         type: 'error',
-
         message: 'Некорректный JSON'
-
       });
-
     }
-
   });
-
-
-  // ==========================================================
-  // CLOSE
-  // ==========================================================
 
   ws.on('close', () => {
-
-    console.log(
-      '[WS] Соединение закрыто:',
-      ws.playerData?.id || 'unknown'
-    );
-
+    console.log('[WS] Соединение закрыто:', ws.playerData?.id || 'unknown');
     disconnect(ws);
-
   });
 
-
-  // ==========================================================
-  // ERROR
-  // ==========================================================
-
   ws.on('error', error => {
-
-    console.log(
-      '[WS] Ошибка:',
-      error.message
-    );
-
+    console.log('[WS] Ошибка:', error.message);
   });
 
 });
-
 
 // ============================================================
 // ROUTER
 // ============================================================
 
 function route(ws, data) {
-
-  if (!data || typeof data !== 'object') {
-    return;
-  }
-
+  if (!data || typeof data !== 'object') return;
   const type = data.type;
 
-
-  // ==========================================================
-  // PING
-  // ==========================================================
-
   if (type === 'ping') {
-
-    send(ws, {
-      type: 'pong'
-    });
-
+    send(ws, { type: 'pong' });
     return;
   }
-
-
-  // ==========================================================
-  // JOIN
-  // ==========================================================
 
   if (type === 'join') {
-
     join(ws, data);
-
     return;
   }
-
-
-  // ==========================================================
-  // MOVE
-  // ==========================================================
 
   if (type === 'move') {
-
     move(ws, data);
-
     return;
   }
-
-
-  // ==========================================================
-  // CHAT
-  // ==========================================================
 
   if (type === 'chat') {
-
     chat(ws, data);
-
     return;
   }
-
-
-  // ==========================================================
-  // LEVEL READY
-  // ==========================================================
 
   if (type === 'level_ready') {
-
     level_ready(ws);
-
     return;
   }
-
-
-  // ==========================================================
-  // FORCE START
-  // ==========================================================
 
   if (type === 'force_start') {
-
     force_start(ws);
-
     return;
   }
-
-
-  // ==========================================================
-  // PLAYER DAMAGE
-  // ==========================================================
 
   if (type === 'player_damage') {
-
     playerDamage(ws, data);
-
     return;
   }
-
-
-  // ==========================================================
-  // TOWN DAMAGE
-  // ==========================================================
 
   if (type === 'town_damage') {
-
     towerDamage(ws, data);
-
     return;
   }
-
-
-  // ==========================================================
-  // BARRACKS DAMAGE
-  // ==========================================================
 
   if (type === 'barracks_damage') {
-
     barracksDamage(ws, data);
-
     return;
   }
-
-
-  // ==========================================================
-  // CREEP DAMAGE
-  // ==========================================================
 
   if (type === 'creep_damage') {
-
     creepDamage(ws, data);
-
     return;
   }
-
-
-  // ==========================================================
-  // RESPAWN
-  // ==========================================================
 
   if (type === 'respawn') {
-
-    respawn(
-      String(data.id || '')
-    );
-
+    respawn(String(data.id || ''));
     return;
   }
 
-
-  // ==========================================================
-  // ANIMATION SYNC
-  // ==========================================================
-
   if (type === 'animation_sync') {
-
     const animType = String(data.animation_type || 'custom');
     const animData = data.animation_data || {};
     const sourceId = String(data.source_id || ws.playerData?.id || '');
     const targetId = String(data.target_id || '');
-
+    
     console.log(`[ANIM] ${sourceId} -> ${animType} -> ${targetId || 'all'}`);
-
-    broadcastAnimation(
-      animType,
-      animData,
-      sourceId,
-      targetId
-    );
-
+    
+    broadcastAnimation(animType, animData, sourceId, targetId);
     return;
   }
 
-
-  // ==========================================================
-  // ANIMATION BATCH
-  // ==========================================================
-
   if (type === 'animation_batch') {
-
     const animations = data.animations || [];
-
     if (Array.isArray(animations)) {
-      
       animations.forEach(anim => {
-        
         syncAnimation({
           type: anim.type || 'custom',
           data: anim.data || {},
           sourceId: anim.source_id || ws.playerData?.id || '',
           targetId: anim.target_id || ''
         });
-        
       });
     }
-
     return;
   }
 
-
-  console.log(
-    '[SERVER] Неизвестный тип:',
-    type
-  );
-
+  console.log('[SERVER] Неизвестный тип:', type);
 }
-
 
 // ============================================================
 // JOIN
 // ============================================================
 
 function join(ws, data) {
-
-  const id = String(
-    data.id || ''
-  ).trim();
-
-
+  const id = String(data.id || '').trim();
+  
   if (!id) {
-
-    send(ws, {
-
-      type: 'error',
-
-      message: 'ID отсутствует'
-
-    });
-
+    send(ws, { type: 'error', message: 'ID отсутствует' });
     return;
   }
 
-
-  // ==========================================================
-  // НЕ ПОЗВОЛЯЕМ ВОЙТИ ВО ВРЕМЯ ИГРЫ
-  // ==========================================================
-
-  if (
-    state.status === 'playing' ||
-    state.status === 'countdown'
-  ) {
-
-    send(ws, {
-
-      type: 'error',
-
-      message: 'Игра уже началась'
-
-    });
-
+  if (state.status === 'playing' || state.status === 'countdown') {
+    send(ws, { type: 'error', message: 'Игра уже началась' });
     return;
   }
 
-
-  // ==========================================================
-  // MAX PLAYERS
-  // ==========================================================
-
-  if (
-    players.size >= MAX_PLAYERS &&
-    !players.has(id)
-  ) {
-
-    send(ws, {
-
-      type: 'error',
-
-      message: 'Лобби заполнено'
-
-    });
-
+  if (players.size >= MAX_PLAYERS && !players.has(id)) {
+    send(ws, { type: 'error', message: 'Лобби заполнено' });
     return;
   }
-
-
-  // ==========================================================
-  // ID ЗАНЯТ
-  // ==========================================================
 
   if (players.has(id)) {
-
-    send(ws, {
-
-      type: 'error',
-
-      message: 'ID занят'
-
-    });
-
+    send(ws, { type: 'error', message: 'ID занят' });
     return;
   }
-
-
-  // ==========================================================
-  // TEAM
-  // ==========================================================
 
   let team1 = 0;
   let team2 = 0;
-
   players.forEach(player => {
-
-    if (player.team === 1) {
-      team1++;
-    }
-
-    if (player.team === 2) {
-      team2++;
-    }
-
+    if (player.team === 1) team1++;
+    if (player.team === 2) team2++;
   });
-
 
   let team = 1;
+  if (team1 > team2) team = 2;
 
-  if (team1 > team2) {
-    team = 2;
-  }
-
-
-  // ==========================================================
-  // CHARACTER
-  // ==========================================================
-
-  const character =
-    Number(data.character) === 2
-      ? 2
-      : 1;
-
-
-  // ==========================================================
-  // SPAWN
-  // ==========================================================
-
+  const character = Number(data.character) === 2 ? 2 : 1;
   const position = spawn(team);
 
-
-  // ==========================================================
-  // CREATE PLAYER
-  // ==========================================================
-
   const player = {
-
     id: id,
-
-    nickname: String(
-      data.nickname || 'Player'
-    ).slice(0, 32),
-
+    nickname: String(data.nickname || 'Player').slice(0, 32),
     character: character,
-
     x: position.x,
-
     y: position.y,
-
     flip: false,
-
     team: team,
-
     hp: PLAYER_MAX_HP,
-
     isDead: false,
-
     inGame: false,
-
     lastDamageTime: Date.now()
-
   };
 
-
-  players.set(
-    id,
-    player
-  );
-
+  players.set(id, player);
   ws.playerData = player;
 
-
-  console.log('');
-  console.log('==========================================');
-  console.log('[JOIN] НОВЫЙ ИГРОК');
-  console.log('[JOIN] ID:', id);
-  console.log('[JOIN] Nickname:', player.nickname);
-  console.log('[JOIN] Character:', player.character);
-  console.log('[JOIN] Team:', player.team);
-  console.log('[JOIN] Spawn:', player.x, player.y);
-  console.log('[JOIN] Players:', players.size);
-  console.log('==========================================');
-  console.log('');
-
-
-  // ==========================================================
-  // JOIN SUCCESS
-  // ==========================================================
+  console.log(`[JOIN] ${id} | Team: ${team} | Character: ${character}`);
 
   send(ws, {
-
     type: 'join_success',
-
     id: id,
-
     team: team,
-
     x: player.x,
-
     y: player.y,
-
     character: player.character,
-
     hp: player.hp
-
   });
-
-
-  // ==========================================================
-  // PLAYER LIST
-  // ==========================================================
 
   sendPlayerList(ws);
 
-
-  // ==========================================================
-  // PLAYER JOINED
-  // ==========================================================
-
   broadcast({
-
     type: 'player_joined',
-
     id: id,
-
     nickname: player.nickname,
-
     character: player.character,
-
     x: player.x,
-
     y: player.y,
-
     flip: player.flip,
-
     team: player.team,
-
     hp: player.hp
-
   }, ws);
 
-
   broadcastPlayerList();
-
-
-  console.log(
-    `[JOIN] ${id} полностью готов`
-  );
-
 }
-
 
 // ============================================================
 // LEVEL READY
 // ============================================================
 
 function level_ready(ws) {
-
   const id = ws.playerData?.id;
-
-  if (!id) {
-    return;
-  }
-
+  if (!id) return;
+  
   const p = players.get(id);
-
-  if (!p) {
-    return;
-  }
-
-  if (state.status === 'playing') {
-    return;
-  }
-
+  if (!p) return;
+  
+  if (state.status === 'playing') return;
+  
   p.inGame = true;
-
-  console.log(
-    `[READY] ${id} готов | ready=${readyCount()} players=${players.size}`
-  );
-
+  console.log(`[READY] ${id} готов | ready=${readyCount()} players=${players.size}`);
   checkAllReady();
-
 }
-
 
 // ============================================================
 // MOVE
 // ============================================================
 
 function move(ws, data) {
-
   const id = ws.playerData?.id;
-
-  if (!id) {
-    return;
-  }
-
+  if (!id) return;
+  
   const p = players.get(id);
-
-  if (!p || p.isDead) {
-    return;
-  }
-
+  if (!p || p.isDead) return;
+  
   const x = Number(data.x);
   const y = Number(data.y);
-
-  if (Number.isFinite(x)) {
-    p.x = x;
-  }
-
-  if (Number.isFinite(y)) {
-    p.y = y;
-  }
-
+  
+  if (Number.isFinite(x)) p.x = x;
+  if (Number.isFinite(y)) p.y = y;
   p.flip = !!data.flip;
-
+  
   broadcast({
-
     type: 'player_moved',
-
     id: p.id,
-
     x: p.x,
-
     y: p.y,
-
     flip: p.flip
-
   }, ws);
-
 }
-
 
 // ============================================================
 // CHAT
 // ============================================================
 
 function chat(ws, data) {
-
   const id = ws.playerData?.id;
-
   const p = players.get(id);
-
-  if (!p) {
-    return;
-  }
-
-  const message = String(
-    data.message || ''
-  ).trim();
-
-  if (!message) {
-    return;
-  }
-
+  if (!p) return;
+  
+  const message = String(data.message || '').trim();
+  if (!message) return;
+  
   broadcast({
-
     type: 'chat',
-
     sender: p.nickname,
-
     message: message.slice(0, 300)
-
   });
-
 }
-
 
 // ============================================================
 // READY CHECK
 // ============================================================
 
 function checkAllReady() {
-
-  if (state.status !== 'lobby') {
-    return;
-  }
-
-  if (players.size < MIN_PLAYERS) {
-    return;
-  }
-
-  if (readyCount() < MIN_PLAYERS) {
-    return;
-  }
-
-  console.log(
-    '[GAME] Все готовы. Запускаем countdown на 60 секунд.'
-  );
-
+  if (state.status !== 'lobby') return;
+  if (players.size < MIN_PLAYERS) return;
+  if (readyCount() < MIN_PLAYERS) return;
+  
+  console.log('[GAME] Все готовы. Запускаем countdown на 60 секунд.');
   startCountdown();
-
 }
-
 
 // ============================================================
 // COUNTDOWN
 // ============================================================
 
 function startCountdown() {
-
-  if (countdownTimer) {
-    return;
-  }
-
-  if (state.status === 'playing') {
-    return;
-  }
-
+  if (countdownTimer) return;
+  if (state.status === 'playing') return;
+  
   state.status = 'countdown';
-
   state.countdown = COUNTDOWN_TIME;
-
+  
   broadcast({
-
     type: 'countdown_start',
-
     time: state.countdown
-
   });
-
-  console.log(
-    `[GAME] Countdown started: ${state.countdown} seconds`
-  );
-
-
+  
+  console.log(`[GAME] Countdown started: ${state.countdown} seconds`);
+  
   countdownTimer = setInterval(() => {
-
     if (state.status !== 'countdown') {
-
       clearInterval(countdownTimer);
-
       countdownTimer = null;
-
       return;
     }
-
-    if (
-      players.size < MIN_PLAYERS ||
-      readyCount() < MIN_PLAYERS
-    ) {
-
-      console.log(
-        '[GAME] Недостаточно игроков. Countdown отменён.'
-      );
-
+    
+    if (players.size < MIN_PLAYERS || readyCount() < MIN_PLAYERS) {
+      console.log('[GAME] Недостаточно игроков. Countdown отменён.');
       cancelCountdown();
-
       return;
     }
-
+    
     state.countdown--;
-
     broadcast({
-
       type: 'countdown_update',
-
       time: state.countdown
-
     });
-
+    
     if (state.countdown <= 0) {
-
       clearInterval(countdownTimer);
-
       countdownTimer = null;
-
       startGame();
-
     }
-
   }, 1000);
-
 }
-
 
 // ============================================================
 // CANCEL COUNTDOWN
 // ============================================================
 
 function cancelCountdown() {
-
   if (countdownTimer) {
-
-    clearInterval(
-      countdownTimer
-    );
-
+    clearInterval(countdownTimer);
     countdownTimer = null;
-
   }
-
+  
   state.status = 'lobby';
-
   state.countdown = COUNTDOWN_TIME;
-
+  
   broadcast({
-
     type: 'countdown_cancel'
-
   });
-
-  console.log(
-    '[GAME] Countdown отменён'
-  );
-
+  
+  console.log('[GAME] Countdown отменён');
 }
-
 
 // ============================================================
 // FORCE START
 // ============================================================
 
 function force_start(ws) {
-
   if (players.size < MIN_PLAYERS) {
-
     send(ws, {
-
       type: 'chat',
-
       sender: 'СИСТЕМА',
-
       message: 'Нужно минимум 2 игрока.'
-
     });
-
     return;
   }
-
+  
   players.forEach(p => {
-
     p.inGame = true;
-
   });
-
+  
   startCountdown();
-
 }
-
 
 // ============================================================
 // START GAME
 // ============================================================
 
 function startGame() {
-
   if (players.size < MIN_PLAYERS) {
-
     cancelCountdown();
-
     return;
   }
-
+  
   state.status = 'playing';
-
   state.timer = GAME_TIME;
-
-
-  // ==========================================================
-  // RESET PLAYER HP / REGEN STATE
-  // ==========================================================
-
+  
   const now = Date.now();
-
   players.forEach(p => {
-
     p.hp = PLAYER_MAX_HP;
-
     p.isDead = false;
-
     p.lastDamageTime = now;
-
   });
-
-
+  
   const data = playersObject();
-
-
-  // ==========================================================
-  // INIT GAME
-  // ==========================================================
-
+  
   wss.clients.forEach(ws => {
-
     const id = ws.playerData?.id;
-
     const p = players.get(id);
-
-    if (!p) {
-      return;
-    }
-
+    if (!p) return;
+    
     send(ws, {
-
       type: 'init_game',
-
       players: data,
-
       my_team: p.team,
-
       town1_hp: state.blueTowerHp,
-
       town2_hp: state.redTowerHp,
-
       barracks1_hp: state.blueBarracksHp,
-
       barracks2_hp: state.redBarracksHp,
-
-      barracks1_destroyed:
-        state.blueBarracksDestroyed,
-
-      barracks2_destroyed:
-        state.redBarracksDestroyed
-
+      barracks1_destroyed: state.blueBarracksDestroyed,
+      barracks2_destroyed: state.redBarracksDestroyed
     });
-
   });
-
-
-  // ==========================================================
-  // GAME START
-  // ==========================================================
-
+  
   broadcast({
-
     type: 'start_game'
-
   });
-
-
-  // ==========================================================
-  // GAME TIMER DISPLAY
-  // ==========================================================
-
+  
   broadcast({
-
     type: 'countdown_update',
-
     time: state.timer
-
   });
-
-
-  // ==========================================================
-  // CLEAR OLD TIMERS
-  // ==========================================================
-
+  
+  // Очищаем старые таймеры
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
   clearInterval(playerRegenTimer);
   clearInterval(animationSyncTimer);
-
-
+  clearInterval(creepUpdateTimer);
+  clearInterval(creepSyncTimer);
+  
   gameTimer = null;
   playerCheckTimer = null;
   creepTimer = null;
   playerRegenTimer = null;
   animationSyncTimer = null;
-
-
-  // ==========================================================
-  // GAME TIMER
-  // ==========================================================
-
+  creepUpdateTimer = null;
+  creepSyncTimer = null;
+  
+  // Запускаем игровой таймер
   gameTimer = setInterval(() => {
-
     if (state.status !== 'playing') {
-
       clearInterval(gameTimer);
-
       gameTimer = null;
-
       return;
     }
-
+    
     state.timer--;
-
-    if (state.timer < 0) {
-      state.timer = 0;
-    }
-
+    if (state.timer < 0) state.timer = 0;
+    
     broadcast({
-
       type: 'countdown_update',
-
       time: state.timer
-
     });
-
-    console.log(
-      `[GAME TIMER] ${formatTime(state.timer)}`
-    );
-
+    
     if (state.timer <= 0) {
-
       clearInterval(gameTimer);
-
       gameTimer = null;
-
       endGame(0);
-
     }
-
   }, 1000);
-
-
-  // ==========================================================
-  // PLAYER CHECK
-  // ==========================================================
-
-  playerCheckTimer = setInterval(
-    checkPlayers,
-    3000
-  );
-
-
-  // ==========================================================
-  // SERVER PLAYER REGEN
-  // ==========================================================
-
-  playerRegenTimer = setInterval(
-    regeneratePlayers,
-    PLAYER_REGEN_INTERVAL
-  );
-
-
-  // ==========================================================
-  // CREEPS
-  // ==========================================================
-
-  creepTimer = setInterval(
-    spawnCreep,
-    5000
-  );
-
-
-  // ==========================================================
-  // ANIMATION SYNC TIMER
-  // ==========================================================
-
-  animationSyncTimer = setInterval(() => {
-
-    if (state.status !== 'playing') {
-      return;
+  
+  // Проверка игроков
+  playerCheckTimer = setInterval(checkPlayers, 3000);
+  
+  // Регенерация игроков
+  playerRegenTimer = setInterval(regeneratePlayers, PLAYER_REGEN_INTERVAL);
+  
+  // Спавн крипов
+  creepTimer = setInterval(spawnCreep, CREEP_SPAWN_INTERVAL);
+  
+  // Обновление позиций крипов
+  creepUpdateTimer = setInterval(updateCreeps, CREEP_UPDATE_INTERVAL);
+  
+  // Полная синхронизация крипов
+  creepSyncTimer = setInterval(() => {
+    if (state.status === 'playing') {
+      broadcastAllCreeps();
     }
-
+  }, CREEP_SYNC_INTERVAL);
+  
+  // Синхронизация анимаций
+  animationSyncTimer = setInterval(() => {
+    if (state.status !== 'playing') return;
+    
     state.animationTick++;
-
     broadcast({
       type: 'animation_tick',
       tick: state.animationTick,
       serverTime: Date.now()
     });
-
   }, ANIMATION_SYNC_INTERVAL);
-
-
-  console.log('');
-  console.log('==========================================');
+  
   console.log('[GAME] ИГРА НАЧАЛАСЬ');
-  console.log('[GAME] Длительность:', GAME_TIME, 'секунд');
-  console.log('[GAME] Длительность:', GAME_TIME / 60, 'минут');
-  console.log('[GAME] Таймер:', formatTime(state.timer));
-  console.log('[GAME] SERVER HP REGEN ENABLED');
-  console.log('[GAME] REGEN:', PLAYER_REGEN_AMOUNT, 'HP');
-  console.log('[GAME] REGEN DELAY:', PLAYER_REGEN_DELAY, 'ms');
-  console.log('[GAME] ANIMATION SYNC ENABLED');
-  console.log('[GAME] ANIMATION SYNC:', ANIMATION_SYNC_INTERVAL, 'ms');
-  console.log('==========================================');
-  console.log('');
-
+  console.log(`[GAME] Крипы будут спавниться каждые ${CREEP_SPAWN_INTERVAL}мс`);
 }
-
 
 // ============================================================
 // SERVER PLAYER REGENERATION
 // ============================================================
 
 function regeneratePlayers() {
-
-  if (state.status !== 'playing') {
-    return;
-  }
-
+  if (state.status !== 'playing') return;
+  
   const now = Date.now();
-
   players.forEach(p => {
-
-    // --------------------------------------------------------
-    // Мёртвые игроки не регенятся
-    // --------------------------------------------------------
-
-    if (p.isDead) {
-      return;
-    }
-
-    // --------------------------------------------------------
-    // Уже полное HP
-    // --------------------------------------------------------
-
+    if (p.isDead) return;
     if (p.hp >= PLAYER_MAX_HP) {
-
       p.hp = PLAYER_MAX_HP;
-
       return;
     }
-
-    // --------------------------------------------------------
-    // Сколько прошло после последнего урона
-    // --------------------------------------------------------
-
-    const elapsed =
-      now - Number(
-        p.lastDamageTime || now
-      );
-
-    // --------------------------------------------------------
-    // Ждём 3 секунды после урона
-    // --------------------------------------------------------
-
-    if (elapsed < PLAYER_REGEN_DELAY) {
-      return;
-    }
-
-    // --------------------------------------------------------
-    // РЕГЕН
-    // --------------------------------------------------------
-
+    
+    const elapsed = now - Number(p.lastDamageTime || now);
+    if (elapsed < PLAYER_REGEN_DELAY) return;
+    
     const oldHp = p.hp;
-
-    p.hp = Math.min(
-      PLAYER_MAX_HP,
-      p.hp + PLAYER_REGEN_AMOUNT
-    );
-
-    if (p.hp === oldHp) {
-      return;
-    }
-
-    console.log(
-      `[REGEN] ${p.id}: ${oldHp} -> ${p.hp}`
-    );
-
-    // --------------------------------------------------------
-    // ОТПРАВЛЯЕМ HP ВСЕМ КЛИЕНТАМ
-    // --------------------------------------------------------
-
+    p.hp = Math.min(PLAYER_MAX_HP, p.hp + PLAYER_REGEN_AMOUNT);
+    
+    if (p.hp === oldHp) return;
+    
     broadcast({
-
       type: 'player_damage',
-
       target_id: p.id,
-
       new_hp: p.hp
-
     });
-
   });
-
 }
-
 
 // ============================================================
 // FORMAT TIME
 // ============================================================
 
 function formatTime(seconds) {
-
-  const safeSeconds =
-    Math.max(
-      0,
-      Number(seconds) || 0
-    );
-
-  const minutes =
-    Math.floor(
-      safeSeconds / 60
-    );
-
-  const secs =
-    safeSeconds % 60;
-
-  return (
-    String(minutes).padStart(2, '0') +
-    ':' +
-    String(secs).padStart(2, '0')
-  );
-
+  const safeSeconds = Math.max(0, Number(seconds) || 0);
+  const minutes = Math.floor(safeSeconds / 60);
+  const secs = safeSeconds % 60;
+  return String(minutes).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
 }
-
-
-// ============================================================
-// SPAWN CREEP
-// ============================================================
-
-function spawnCreep() {
-
-  if (state.status !== 'playing') {
-    return;
-  }
-
-  const team =
-    state.nextCreepTeam;
-
-  state.nextCreepTeam =
-    team === 1
-      ? 2
-      : 1;
-
-  const creep = {
-
-    id:
-      `creep_${state.nextCreepId++}`,
-
-    team: team,
-
-    hp: 80,
-
-    x:
-      team === 1
-        ? -1400
-        : 2590,
-
-    y: 450
-
-  };
-
-  state.creeps.push(
-    creep
-  );
-
-  broadcast({
-
-    type: 'creep_spawn',
-
-    creep: creep
-
-  });
-
-  // Синхронизация анимации спавна крипа
-  broadcastAnimation(
-    'creep_spawn',
-    { creep_id: creep.id, position: { x: creep.x, y: creep.y } },
-    '',
-    ''
-  );
-
-}
-
 
 // ============================================================
 // PLAYER DAMAGE
 // ============================================================
 
 function playerDamage(_, data) {
-
-  if (state.status !== 'playing') {
-    return;
-  }
-
-  const id = String(
-    data.target_id || ''
-  );
-
+  if (state.status !== 'playing') return;
+  
+  const id = String(data.target_id || '');
   const p = players.get(id);
-
-  if (!p || p.isDead) {
-    return;
-  }
-
-  const damage =
-    Math.max(
-      0,
-      Number(data.damage) || 10
-    );
-
-  // ==========================================================
-  // DAMAGE
-  // ==========================================================
-
-  p.hp =
-    Math.max(
-      0,
-      p.hp - damage
-    );
-
-
-  // ==========================================================
-  // ВАЖНО:
-  // КАЖДЫЙ УРОН ПЕРЕЗАПУСКАЕТ ТАЙМЕР РЕГЕНА
-  // ==========================================================
-
+  if (!p || p.isDead) return;
+  
+  const damage = Math.max(0, Number(data.damage) || 10);
+  
+  p.hp = Math.max(0, p.hp - damage);
   p.lastDamageTime = Date.now();
-
-
-  console.log(
-    `[DAMAGE] ${p.id}: -${damage} HP=${p.hp}`
-  );
-
-
-  // ==========================================================
-  // SYNC HP
-  // ==========================================================
-
+  
   broadcast({
-
     type: 'player_damage',
-
     target_id: p.id,
-
     new_hp: p.hp
-
   });
-
-
-  // ==========================================================
-  // ANIMATION SYNC
-  // ==========================================================
-
+  
   if (p.hp <= 0) {
-    
-    // Синхронизация анимации смерти
-    broadcastAnimation(
-      'death',
-      { position: { x: p.x, y: p.y } },
-      p.id,
-      ''
-    );
-    
-  } else {
-    
-    // Синхронизация анимации получения урона
-    broadcastAnimation(
-      'hit',
-      { damage: damage, hp: p.hp },
-      '',
-      p.id
-    );
-    
-  }
-
-
-  // ==========================================================
-  // DEATH
-  // ==========================================================
-
-  if (p.hp <= 0) {
-
     p.hp = 0;
-
     p.isDead = true;
-
     p.lastDamageTime = Date.now();
-
-
-    console.log(
-      `[DEATH] ${p.id}`
-    );
-
-
+    
     broadcast({
-
       type: 'player_damage',
-
       target_id: p.id,
-
       new_hp: 0
-
     });
-
-
-    // ========================================================
-    // SERVER CONTROLLED RESPAWN
-    // ========================================================
-
+    
     setTimeout(() => {
-
-      const currentPlayer =
-        players.get(p.id);
-
-      if (!currentPlayer) {
-        return;
-      }
-
-      if (state.status !== 'playing') {
-        return;
-      }
-
-      if (!currentPlayer.isDead) {
-        return;
-      }
-
-      respawn(
-        currentPlayer.id
-      );
-
+      const currentPlayer = players.get(p.id);
+      if (!currentPlayer) return;
+      if (state.status !== 'playing') return;
+      if (!currentPlayer.isDead) return;
+      respawn(currentPlayer.id);
     }, 3000);
-
   }
-
 }
-
 
 // ============================================================
 // RESPAWN
 // ============================================================
 
 function respawn(id) {
-
-  const p =
-    players.get(
-      String(id || '')
-    );
-
-  if (!p) {
-    return;
-  }
-
-  if (state.status !== 'playing') {
-    return;
-  }
-
-  // ==========================================================
-  // НЕ ВОЗРОЖДАЕМ ЖИВОГО
-  // ==========================================================
-
-  if (!p.isDead) {
-    return;
-  }
-
-
-  const position =
-    spawn(
-      p.team,
-      true
-    );
-
-
-  // ==========================================================
-  // НОВАЯ ЖИЗНЬ
-  // ==========================================================
-
+  const p = players.get(String(id || ''));
+  if (!p) return;
+  if (state.status !== 'playing') return;
+  if (!p.isDead) return;
+  
+  const position = spawn(p.team, true);
+  
   p.hp = PLAYER_MAX_HP;
-
   p.isDead = false;
-
   p.x = position.x;
-
   p.y = position.y;
-
   p.flip = false;
-
-
-  // ==========================================================
-  // РЕГЕН НЕ НАЧИНАЕТСЯ СРАЗУ
-  // ==========================================================
-
   p.lastDamageTime = Date.now();
-
-
-  console.log(
-    `[RESPAWN] ${p.id} | HP=${p.hp} | position=${p.x},${p.y}`
-  );
-
-
-  // ==========================================================
-  // ОТПРАВЛЯЕМ ВОЗРОЖДЕНИЕ
-  // ==========================================================
-
+  
   broadcast({
-
     type: 'respawn',
-
     id: p.id,
-
     x: p.x,
-
     y: p.y,
-
     hp: p.hp
-
   });
-
-
-  // ==========================================================
-  // ДОПОЛНИТЕЛЬНО СИНХРОНИЗИРУЕМ HP
-  // ==========================================================
-
+  
   broadcast({
-
     type: 'player_damage',
-
     target_id: p.id,
-
     new_hp: p.hp
-
   });
-
-
-  // ==========================================================
-  // ANIMATION SYNC
-  // ==========================================================
-
-  broadcastAnimation(
-    'respawn',
-    { position: { x: p.x, y: p.y } },
-    p.id,
-    ''
-  );
-
+  
+  broadcastAnimation('respawn', { position: { x: p.x, y: p.y } }, p.id, '');
 }
-
 
 // ============================================================
 // TOWER DAMAGE
 // ============================================================
 
 function towerDamage(_, data) {
-
-  if (state.status !== 'playing') {
-    return;
-  }
-
-  const blue =
-    Number(data.town_id) === 1;
-
-  const key =
-    blue
-      ? 'blueTowerHp'
-      : 'redTowerHp';
-
-  const damage =
-    Math.max(
-      0,
-      Number(data.damage) || 10
-    );
-
-  state[key] =
-    Math.max(
-      0,
-      state[key] - damage
-    );
-
+  if (state.status !== 'playing') return;
+  
+  const blue = Number(data.town_id) === 1;
+  const key = blue ? 'blueTowerHp' : 'redTowerHp';
+  const damage = Math.max(0, Number(data.damage) || 10);
+  
+  state[key] = Math.max(0, state[key] - damage);
+  
   broadcast({
-
     type: 'tower_damage',
-
-    town_id:
-      blue
-        ? 1
-        : 2,
-
-    new_hp:
-      state[key]
-
+    town_id: blue ? 1 : 2,
+    new_hp: state[key]
   });
-
+  
   if (state[key] <= 0) {
-
-    endGame(
-      blue
-        ? 2
-        : 1
-    );
-
+    endGame(blue ? 2 : 1);
   }
-
 }
-
 
 // ============================================================
 // BARRACKS DAMAGE
 // ============================================================
 
 function barracksDamage(_, data) {
-
-  if (state.status !== 'playing') {
-    return;
-  }
-
-  const blue =
-    Number(data.barracks_id) === 1;
-
-  const hpKey =
-    blue
-      ? 'blueBarracksHp'
-      : 'redBarracksHp';
-
-  const deadKey =
-    blue
-      ? 'blueBarracksDestroyed'
-      : 'redBarracksDestroyed';
-
-  const damage =
-    Math.max(
-      0,
-      Number(data.damage) || 10
-    );
-
-  state[hpKey] =
-    Math.max(
-      0,
-      state[hpKey] - damage
-    );
-
+  if (state.status !== 'playing') return;
+  
+  const blue = Number(data.barracks_id) === 1;
+  const hpKey = blue ? 'blueBarracksHp' : 'redBarracksHp';
+  const deadKey = blue ? 'blueBarracksDestroyed' : 'redBarracksDestroyed';
+  const damage = Math.max(0, Number(data.damage) || 10);
+  
+  state[hpKey] = Math.max(0, state[hpKey] - damage);
+  
   broadcast({
-
     type: 'barracks_damage',
-
-    barracks_id:
-      blue
-        ? 1
-        : 2,
-
-    new_hp:
-      state[hpKey]
-
+    barracks_id: blue ? 1 : 2,
+    new_hp: state[hpKey]
   });
-
-  if (
-    state[hpKey] <= 0 &&
-    !state[deadKey]
-  ) {
-
+  
+  if (state[hpKey] <= 0 && !state[deadKey]) {
     state[deadKey] = true;
-
+    
     broadcast({
-
       type: 'barracks_destroyed',
-
-      barracks_id:
-        blue
-          ? 1
-          : 2
-
+      barracks_id: blue ? 1 : 2
     });
-
   }
-
 }
 
-
 // ============================================================
-// CREEP DAMAGE
+// CREEP DAMAGE (от клиентов)
 // ============================================================
 
 function creepDamage(_, data) {
-
-  if (state.status !== 'playing') {
-    return;
-  }
-
-  const id =
-    String(
-      data.id || ''
-    );
-
-  const creep =
-    state.creeps.find(
-      item => item.id === id
-    );
-
-  if (!creep) {
-    return;
-  }
-
-  const damage =
-    Math.max(
-      0,
-      Number(data.damage) || 10
-    );
-
-  creep.hp =
-    Math.max(
-      0,
-      creep.hp - damage
-    );
-
+  if (state.status !== 'playing') return;
+  
+  const id = String(data.id || '');
+  const creep = state.creeps.find(item => item.id === id);
+  
+  if (!creep) return;
+  
+  const damage = Math.max(0, Number(data.damage) || 10);
+  
+  creep.hp = Math.max(0, creep.hp - damage);
+  
   broadcast({
-
     type: 'creep_damage',
-
     id: creep.id,
-
     new_hp: creep.hp
-
   });
-
+  
   if (creep.hp <= 0) {
-
-    state.creeps =
-      state.creeps.filter(
-        item => item !== creep
-      );
-
+    creep.isDead = true;
+    
     broadcast({
-
       type: 'creep_destroy',
-
       id: creep.id
-
     });
-
-    // Синхронизация анимации уничтожения крипа
-    broadcastAnimation(
-      'creep_destroy',
-      { creep_id: creep.id },
-      '',
-      ''
-    );
-
+    
+    broadcastAnimation('creep_destroy', { creep_id: creep.id }, '', '');
   }
-
 }
-
 
 // ============================================================
 // CHECK PLAYERS
 // ============================================================
 
 function checkPlayers() {
-
-  if (state.status !== 'playing') {
-    return;
-  }
-
+  if (state.status !== 'playing') return;
+  
   if (players.size < MIN_PLAYERS) {
-
-    const remaining =
-      players.size > 0
-        ? [...players.values()][0]
-        : null;
-
-    endGame(
-      remaining
-        ? remaining.team
-        : 0
-    );
-
+    const remaining = players.size > 0 ? [...players.values()][0] : null;
+    endGame(remaining ? remaining.team : 0);
   }
-
 }
-
 
 // ============================================================
 // END GAME
 // ============================================================
 
 function endGame(winner) {
-
-  if (state.status !== 'playing') {
-    return;
-  }
-
+  if (state.status !== 'playing') return;
+  
   state.status = 'finished';
-
   state.winner = winner;
-
   state.timer = 0;
-
-
-  // ==========================================================
-  // STOP TIMERS
-  // ==========================================================
-
+  
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
   clearInterval(playerRegenTimer);
   clearInterval(animationSyncTimer);
-
+  clearInterval(creepUpdateTimer);
+  clearInterval(creepSyncTimer);
+  
   gameTimer = null;
   playerCheckTimer = null;
   creepTimer = null;
   playerRegenTimer = null;
   animationSyncTimer = null;
-
-
-  // ==========================================================
-  // SHOW 00:00
-  // ==========================================================
-
+  creepUpdateTimer = null;
+  creepSyncTimer = null;
+  
   broadcast({
-
     type: 'countdown_update',
-
     time: 0
-
   });
-
-
-  const result =
-    winner === 0
-      ? 'НИЧЬЯ!'
-      : `ПОБЕДА КОМАНДЫ ${winner}!`;
-
-
+  
+  const result = winner === 0 ? 'НИЧЬЯ!' : `ПОБЕДА КОМАНДЫ ${winner}!`;
+  
   broadcast({
-
     type: 'chat',
-
     sender: 'СИСТЕМА',
-
     message: result
-
   });
-
-
+  
   broadcast({
-
     type: 'game_over',
-
     winner_team: winner
-
   });
-
-
+  
   broadcast({
-
     type: 'game_end',
-
     winner: winner
-
   });
-
-
-  console.log('');
-  console.log('==========================================');
-  console.log('[GAME] ИГРА ЗАКОНЧЕНА');
-  console.log('[GAME] WINNER:', winner);
-  console.log('==========================================');
-  console.log('');
-
-
-  setTimeout(
-    resetGame,
-    5000
-  );
-
+  
+  console.log(`[GAME] ИГРА ЗАКОНЧЕНА | WINNER: ${winner}`);
+  
+  setTimeout(resetGame, 5000);
 }
-
 
 // ============================================================
 // RESET GAME
 // ============================================================
 
 function resetGame() {
-
   resetState();
-
+  
   players.forEach(p => {
-
-    const position =
-      spawn(
-        p.team,
-        true
-      );
-
+    const position = spawn(p.team, true);
+    
     Object.assign(p, {
-
       inGame: false,
-
       hp: PLAYER_MAX_HP,
-
       isDead: false,
-
       x: position.x,
-
       y: position.y,
-
       flip: false,
-
       lastDamageTime: Date.now()
-
     });
-
   });
-
-
+  
   broadcast({
-
     type: 'reset_lobby'
-
   });
-
-
+  
   broadcastPlayerList();
-
-
-  console.log(
-    '[GAME] Лобби сброшено'
-  );
-
+  
+  console.log('[GAME] Лобби сброшено');
 }
-
 
 // ============================================================
 // DISCONNECT
 // ============================================================
 
 function disconnect(ws) {
-
-  const id =
-    ws.playerData?.id;
-
-  if (!id) {
-    return;
-  }
-
-  if (!players.has(id)) {
-    return;
-  }
-
+  const id = ws.playerData?.id;
+  if (!id) return;
+  if (!players.has(id)) return;
+  
   players.delete(id);
-
-  console.log(
-    `[DISCONNECT] ${id} | players=${players.size}`
-  );
-
+  
+  console.log(`[DISCONNECT] ${id} | players=${players.size}`);
+  
   broadcast({
-
     type: 'player_left',
-
     id: id
-
   });
-
+  
   broadcastPlayerList();
-
-
-  // ==========================================================
-  // CANCEL COUNTDOWN
-  // ==========================================================
-
-  if (
-    state.status === 'countdown' &&
-    (
-      players.size < MIN_PLAYERS ||
-      readyCount() < MIN_PLAYERS
-    )
-  ) {
-
+  
+  if (state.status === 'countdown' && (players.size < MIN_PLAYERS || readyCount() < MIN_PLAYERS)) {
     cancelCountdown();
-
   }
-
-
-  // ==========================================================
-  // CHECK GAME
-  // ==========================================================
-
+  
   if (state.status === 'playing') {
-
     checkPlayers();
-
   }
-
 }
-
 
 // ============================================================
 // PROCESS EXIT
 // ============================================================
 
 process.on('SIGINT', () => {
-
-  console.log(
-    '[SERVER] Остановка...'
-  );
-
+  console.log('[SERVER] Остановка...');
+  
   clearInterval(countdownTimer);
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
   clearInterval(playerRegenTimer);
   clearInterval(animationSyncTimer);
-
-  countdownTimer = null;
-  gameTimer = null;
-  playerCheckTimer = null;
-  creepTimer = null;
-  playerRegenTimer = null;
-  animationSyncTimer = null;
-
+  clearInterval(creepUpdateTimer);
+  clearInterval(creepSyncTimer);
+  
   process.exit(0);
-
 });
 
-
 process.on('SIGTERM', () => {
-
-  console.log(
-    '[SERVER] SIGTERM'
-  );
-
+  console.log('[SERVER] SIGTERM');
+  
   clearInterval(countdownTimer);
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
   clearInterval(playerRegenTimer);
   clearInterval(animationSyncTimer);
-
+  clearInterval(creepUpdateTimer);
+  clearInterval(creepSyncTimer);
+  
   process.exit(0);
-
 });
