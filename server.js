@@ -6,15 +6,26 @@ const PORT = process.env.PORT || 3000;
 const MAX_PLAYERS = 6;
 const MIN_PLAYERS = 2;
 
+
 // ============================================================
 // GAME SETTINGS
 // ============================================================
 
-// 60 секунд ожидания перед началом игры
 const COUNTDOWN_TIME = 60;
-
-// 10 минут игры
 const GAME_TIME = 600;
+
+
+// ============================================================
+// PLAYER SETTINGS
+// ============================================================
+
+const PLAYER_MAX_HP = 100;
+
+// Сколько HP восстанавливается за секунду
+const PLAYER_REGEN_AMOUNT = 5;
+
+// Интервал регенерации
+const PLAYER_REGEN_INTERVAL = 1000;
 
 
 // ============================================================
@@ -28,6 +39,7 @@ let countdownTimer = null;
 let gameTimer = null;
 let playerCheckTimer = null;
 let creepTimer = null;
+let regenTimer = null;
 
 
 // ============================================================
@@ -40,10 +52,8 @@ function resetState() {
 
     status: 'lobby',
 
-    // Обратный отсчёт перед игрой
     countdown: COUNTDOWN_TIME,
 
-    // Таймер игры
     timer: GAME_TIME,
 
     winner: 0,
@@ -122,6 +132,8 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('COUNTDOWN:', COUNTDOWN_TIME, 'seconds');
   console.log('GAME TIME:', GAME_TIME, 'seconds');
   console.log('GAME TIME:', GAME_TIME / 60, 'minutes');
+  console.log('PLAYER MAX HP:', PLAYER_MAX_HP);
+  console.log('PLAYER REGEN:', PLAYER_REGEN_AMOUNT, 'HP/sec');
   console.log('==========================================');
   console.log('');
 
@@ -320,7 +332,7 @@ wss.on('connection', ws => {
 
     team: 0,
 
-    hp: 100,
+    hp: PLAYER_MAX_HP,
 
     isDead: false,
 
@@ -707,7 +719,7 @@ function join(ws, data) {
 
     team: team,
 
-    hp: 100,
+    hp: PLAYER_MAX_HP,
 
     isDead: false,
 
@@ -733,6 +745,7 @@ function join(ws, data) {
   console.log('[JOIN] Character:', player.character);
   console.log('[JOIN] Team:', player.team);
   console.log('[JOIN] Spawn:', player.x, player.y);
+  console.log('[JOIN] HP:', player.hp);
   console.log('[JOIN] Players:', players.size);
   console.log('==========================================');
   console.log('');
@@ -1010,7 +1023,10 @@ function startCountdown() {
     }
 
 
-    // Проверяем игроков
+    // ========================================================
+    // ПРОВЕРКА ИГРОКОВ
+    // ========================================================
+
     if (
       players.size < MIN_PLAYERS ||
       readyCount() < MIN_PLAYERS
@@ -1199,11 +1215,7 @@ function startGame() {
 
 
   // ==========================================================
-  // ВАЖНО:
-  // Сразу после start_game отправляем 10:00.
-  //
-  // Используем countdown_update, чтобы существующий
-  // Net.gd уже мог передавать этот сигнал.
+  // СРАЗУ ОТПРАВЛЯЕМ 10:00
   // ==========================================================
 
   broadcast({
@@ -1222,11 +1234,13 @@ function startGame() {
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
+  clearInterval(regenTimer);
 
 
   gameTimer = null;
   playerCheckTimer = null;
   creepTimer = null;
+  regenTimer = null;
 
 
   // ==========================================================
@@ -1253,10 +1267,6 @@ function startGame() {
     }
 
 
-    // ========================================================
-    // ОТПРАВЛЯЕМ ОСТАВШЕЕСЯ ВРЕМЯ ВСЕМ
-    // ========================================================
-
     broadcast({
 
       type: 'countdown_update',
@@ -1270,10 +1280,6 @@ function startGame() {
       `[GAME TIMER] ${formatTime(state.timer)}`
     );
 
-
-    // ========================================================
-    // ВРЕМЯ ЗАКОНЧИЛОСЬ
-    // ========================================================
 
     if (state.timer <= 0) {
 
@@ -1308,14 +1314,102 @@ function startGame() {
   );
 
 
+  // ==========================================================
+  // PLAYER REGENERATION
+  // ==========================================================
+
+  regenTimer = setInterval(
+    regeneratePlayers,
+    PLAYER_REGEN_INTERVAL
+  );
+
+
   console.log('');
   console.log('==========================================');
   console.log('[GAME] ИГРА НАЧАЛАСЬ');
   console.log('[GAME] Длительность:', GAME_TIME, 'секунд');
   console.log('[GAME] Длительность:', GAME_TIME / 60, 'минут');
   console.log('[GAME] Таймер:', formatTime(state.timer));
+  console.log('[GAME] REGEN:', PLAYER_REGEN_AMOUNT, 'HP/sec');
   console.log('==========================================');
   console.log('');
+
+}
+
+
+// ============================================================
+// PLAYER REGENERATION
+// ============================================================
+
+function regeneratePlayers() {
+
+  if (state.status !== 'playing') {
+    return;
+  }
+
+
+  players.forEach(p => {
+
+    // --------------------------------------------------------
+    // Игрок мёртв — реген не работает
+    // --------------------------------------------------------
+
+    if (p.isDead) {
+      return;
+    }
+
+
+    // --------------------------------------------------------
+    // HP уже максимум
+    // --------------------------------------------------------
+
+    if (p.hp >= PLAYER_MAX_HP) {
+      return;
+    }
+
+
+    const oldHp = p.hp;
+
+
+    // --------------------------------------------------------
+    // Восстанавливаем HP
+    // --------------------------------------------------------
+
+    p.hp = Math.min(
+      PLAYER_MAX_HP,
+      p.hp + PLAYER_REGEN_AMOUNT
+    );
+
+
+    // --------------------------------------------------------
+    // Если HP не изменилось
+    // --------------------------------------------------------
+
+    if (p.hp === oldHp) {
+      return;
+    }
+
+
+    // --------------------------------------------------------
+    // ОТПРАВЛЯЕМ НОВЫЙ HP ВСЕМ
+    // --------------------------------------------------------
+
+    broadcast({
+
+      type: 'player_damage',
+
+      target_id: p.id,
+
+      new_hp: p.hp
+
+    });
+
+
+    console.log(
+      `[REGEN] ${p.id}: ${oldHp} -> ${p.hp}`
+    );
+
+  });
 
 }
 
@@ -1412,23 +1506,39 @@ function spawnCreep() {
 // PLAYER DAMAGE
 // ============================================================
 
-function playerDamage(_, data) {
+function playerDamage(ws, data) {
 
   if (state.status !== 'playing') {
     return;
   }
 
 
-  const id = String(
+  const attackerId = ws.playerData?.id;
+
+  const targetId = String(
     data.target_id || ''
   );
 
 
-  const p = players.get(id);
+  const p = players.get(targetId);
 
 
   if (!p || p.isDead) {
     return;
+  }
+
+
+  // ==========================================================
+  // НЕ ДАЁМ ИГРОКУ АТАКОВАТЬ САМОГО СЕБЯ
+  // ==========================================================
+
+  if (
+    attackerId &&
+    attackerId === targetId
+  ) {
+
+    return;
+
   }
 
 
@@ -1439,12 +1549,30 @@ function playerDamage(_, data) {
     );
 
 
+  if (damage <= 0) {
+    return;
+  }
+
+
+  // ==========================================================
+  // DAMAGE
+  // ==========================================================
+
   p.hp =
     Math.max(
       0,
       p.hp - damage
     );
 
+
+  console.log(
+    `[DAMAGE] ${p.id}: -${damage} HP=${p.hp}`
+  );
+
+
+  // ==========================================================
+  // SYNC HP TO EVERYONE
+  // ==========================================================
 
   broadcast({
 
@@ -1457,14 +1585,58 @@ function playerDamage(_, data) {
   });
 
 
+  // ==========================================================
+  // DEATH
+  // ==========================================================
+
   if (p.hp <= 0) {
+
+    p.hp = 0;
 
     p.isDead = true;
 
 
+    // --------------------------------------------------------
+    // Немедленно отправляем состояние смерти
+    // --------------------------------------------------------
+
+    broadcast({
+
+      type: 'player_damage',
+
+      target_id: p.id,
+
+      new_hp: 0
+
+    });
+
+
+    console.log(
+      `[DEATH] ${p.id}`
+    );
+
+
+    // --------------------------------------------------------
+    // RESPawn через 3 секунды
+    // --------------------------------------------------------
+
     setTimeout(() => {
 
-      respawn(p.id);
+      const currentPlayer =
+        players.get(p.id);
+
+
+      if (!currentPlayer) {
+        return;
+      }
+
+
+      if (!currentPlayer.isDead) {
+        return;
+      }
+
+
+      respawn(currentPlayer.id);
 
     }, 3000);
 
@@ -1495,6 +1667,15 @@ function respawn(id) {
   }
 
 
+  // ==========================================================
+  // Если игрок уже жив — повторно не возрождаем
+  // ==========================================================
+
+  if (!p.isDead) {
+    return;
+  }
+
+
   const position =
     spawn(
       p.team,
@@ -1502,18 +1683,33 @@ function respawn(id) {
     );
 
 
-  Object.assign(p, {
+  // ==========================================================
+  // RESET PLAYER
+  // ==========================================================
 
-    hp: 100,
+  p.hp = PLAYER_MAX_HP;
 
-    isDead: false,
+  p.isDead = false;
 
-    x: position.x,
+  p.x = position.x;
 
-    y: position.y
+  p.y = position.y;
 
-  });
 
+  console.log('');
+  console.log('==========================================');
+  console.log('[RESPAWN]');
+  console.log('[RESPAWN] ID:', p.id);
+  console.log('[RESPAWN] Team:', p.team);
+  console.log('[RESPAWN] HP:', p.hp);
+  console.log('[RESPAWN] Position:', p.x, p.y);
+  console.log('==========================================');
+  console.log('');
+
+
+  // ==========================================================
+  // SEND RESPAWN TO EVERYONE
+  // ==========================================================
 
   broadcast({
 
@@ -1526,6 +1722,21 @@ function respawn(id) {
     y: p.y,
 
     hp: p.hp
+
+  });
+
+
+  // ==========================================================
+  // EXTRA HP SYNC
+  // ==========================================================
+
+  broadcast({
+
+    type: 'player_damage',
+
+    target_id: p.id,
+
+    new_hp: p.hp
 
   });
 
@@ -1558,6 +1769,11 @@ function towerDamage(_, data) {
       0,
       Number(data.damage) || 10
     );
+
+
+  if (damage <= 0) {
+    return;
+  }
 
 
   state[key] =
@@ -1627,6 +1843,11 @@ function barracksDamage(_, data) {
       0,
       Number(data.damage) || 10
     );
+
+
+  if (damage <= 0) {
+    return;
+  }
 
 
   state[hpKey] =
@@ -1708,6 +1929,11 @@ function creepDamage(_, data) {
       0,
       Number(data.damage) || 10
     );
+
+
+  if (damage <= 0) {
+    return;
+  }
 
 
   creep.hp =
@@ -1804,11 +2030,13 @@ function endGame(winner) {
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
+  clearInterval(regenTimer);
 
 
   gameTimer = null;
   playerCheckTimer = null;
   creepTimer = null;
+  regenTimer = null;
 
 
   // ==========================================================
@@ -1881,8 +2109,34 @@ function endGame(winner) {
 
 function resetGame() {
 
+  // ==========================================================
+  // ОСТАНАВЛИВАЕМ ВСЕ ТАЙМЕРЫ
+  // ==========================================================
+
+  clearInterval(countdownTimer);
+  clearInterval(gameTimer);
+  clearInterval(playerCheckTimer);
+  clearInterval(creepTimer);
+  clearInterval(regenTimer);
+
+
+  countdownTimer = null;
+  gameTimer = null;
+  playerCheckTimer = null;
+  creepTimer = null;
+  regenTimer = null;
+
+
+  // ==========================================================
+  // RESET STATE
+  // ==========================================================
+
   resetState();
 
+
+  // ==========================================================
+  // RESET PLAYERS
+  // ==========================================================
 
   players.forEach(p => {
 
@@ -1897,18 +2151,24 @@ function resetGame() {
 
       inGame: false,
 
-      hp: 100,
+      hp: PLAYER_MAX_HP,
 
       isDead: false,
 
       x: position.x,
 
-      y: position.y
+      y: position.y,
+
+      flip: false
 
     });
 
   });
 
+
+  // ==========================================================
+  // RESET LOBBY
+  // ==========================================================
 
   broadcast({
 
@@ -2012,12 +2272,14 @@ process.on('SIGINT', () => {
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
+  clearInterval(regenTimer);
 
 
   countdownTimer = null;
   gameTimer = null;
   playerCheckTimer = null;
   creepTimer = null;
+  regenTimer = null;
 
 
   process.exit(0);
@@ -2036,6 +2298,14 @@ process.on('SIGTERM', () => {
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
+  clearInterval(regenTimer);
+
+
+  countdownTimer = null;
+  gameTimer = null;
+  playerCheckTimer = null;
+  creepTimer = null;
+  regenTimer = null;
 
 
   process.exit(0);
