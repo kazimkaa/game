@@ -14,6 +14,13 @@ const COUNTDOWN_TIME = 60;
 const GAME_TIME = 600;
 
 // ============================================================
+// ANIMATION SYNC SETTINGS
+// ============================================================
+
+// Интервал синхронизации анимаций (ms)
+const ANIMATION_SYNC_INTERVAL = 50;
+
+// ============================================================
 // PLAYER HP / REGEN SETTINGS
 // ============================================================
 
@@ -43,6 +50,7 @@ let gameTimer = null;
 let playerCheckTimer = null;
 let creepTimer = null;
 let playerRegenTimer = null;
+let animationSyncTimer = null;
 
 
 // ============================================================
@@ -74,7 +82,11 @@ function resetState() {
 
     nextCreepTeam: 1,
 
-    nextCreepId: 1
+    nextCreepId: 1,
+
+    // Синхронизация анимаций
+    animationTick: 0,
+    animations: []
 
   });
 
@@ -140,6 +152,8 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('PLAYER REGEN DELAY:', PLAYER_REGEN_DELAY, 'ms');
   console.log('PLAYER REGEN:', PLAYER_REGEN_AMOUNT, 'HP');
   console.log('PLAYER REGEN INTERVAL:', PLAYER_REGEN_INTERVAL, 'ms');
+  console.log('');
+  console.log('ANIMATION SYNC INTERVAL:', ANIMATION_SYNC_INTERVAL, 'ms');
   console.log('==========================================');
   console.log('');
 
@@ -153,7 +167,7 @@ server.listen(PORT, '0.0.0.0', () => {
 setInterval(() => {
 
   console.log(
-    `[SERVER] alive | players=${players.size} | status=${state.status} | timer=${state.timer}`
+    `[SERVER] alive | players=${players.size} | status=${state.status} | timer=${state.timer} | animTick=${state.animationTick}`
   );
 
 }, 30000);
@@ -311,6 +325,53 @@ function readyCount() {
 
   return count;
 
+}
+
+
+// ============================================================
+// ANIMATION SYNC HELPERS
+// ============================================================
+
+function syncAnimation(animData) {
+  
+  if (!animData || typeof animData !== 'object') {
+    return null;
+  }
+
+  // Создаем объект анимации
+  const animation = {
+    id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    tick: state.animationTick,
+    serverTime: Date.now(),
+    type: animData.type || 'custom',
+    data: animData.data || {},
+    sourceId: animData.sourceId || '',
+    targetId: animData.targetId || ''
+  };
+
+  // Сохраняем в истории (максимум 100 последних)
+  state.animations.push(animation);
+  
+  if (state.animations.length > 100) {
+    state.animations.shift();
+  }
+
+  // Отправляем всем клиентам
+  broadcast({
+    type: 'animation_sync',
+    animation: animation
+  });
+
+  return animation;
+}
+
+function broadcastAnimation(type, data, sourceId = '', targetId = '') {
+  return syncAnimation({
+    type: type,
+    data: data,
+    sourceId: sourceId,
+    targetId: targetId
+  });
 }
 
 
@@ -563,6 +624,56 @@ function route(ws, data) {
     respawn(
       String(data.id || '')
     );
+
+    return;
+  }
+
+
+  // ==========================================================
+  // ANIMATION SYNC
+  // ==========================================================
+
+  if (type === 'animation_sync') {
+
+    const animType = String(data.animation_type || 'custom');
+    const animData = data.animation_data || {};
+    const sourceId = String(data.source_id || ws.playerData?.id || '');
+    const targetId = String(data.target_id || '');
+
+    console.log(`[ANIM] ${sourceId} -> ${animType} -> ${targetId || 'all'}`);
+
+    broadcastAnimation(
+      animType,
+      animData,
+      sourceId,
+      targetId
+    );
+
+    return;
+  }
+
+
+  // ==========================================================
+  // ANIMATION BATCH
+  // ==========================================================
+
+  if (type === 'animation_batch') {
+
+    const animations = data.animations || [];
+
+    if (Array.isArray(animations)) {
+      
+      animations.forEach(anim => {
+        
+        syncAnimation({
+          type: anim.type || 'custom',
+          data: anim.data || {},
+          sourceId: anim.source_id || ws.playerData?.id || '',
+          targetId: anim.target_id || ''
+        });
+        
+      });
+    }
 
     return;
   }
@@ -1226,12 +1337,14 @@ function startGame() {
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
   clearInterval(playerRegenTimer);
+  clearInterval(animationSyncTimer);
 
 
   gameTimer = null;
   playerCheckTimer = null;
   creepTimer = null;
   playerRegenTimer = null;
+  animationSyncTimer = null;
 
 
   // ==========================================================
@@ -1310,6 +1423,27 @@ function startGame() {
   );
 
 
+  // ==========================================================
+  // ANIMATION SYNC TIMER
+  // ==========================================================
+
+  animationSyncTimer = setInterval(() => {
+
+    if (state.status !== 'playing') {
+      return;
+    }
+
+    state.animationTick++;
+
+    broadcast({
+      type: 'animation_tick',
+      tick: state.animationTick,
+      serverTime: Date.now()
+    });
+
+  }, ANIMATION_SYNC_INTERVAL);
+
+
   console.log('');
   console.log('==========================================');
   console.log('[GAME] ИГРА НАЧАЛАСЬ');
@@ -1319,6 +1453,8 @@ function startGame() {
   console.log('[GAME] SERVER HP REGEN ENABLED');
   console.log('[GAME] REGEN:', PLAYER_REGEN_AMOUNT, 'HP');
   console.log('[GAME] REGEN DELAY:', PLAYER_REGEN_DELAY, 'ms');
+  console.log('[GAME] ANIMATION SYNC ENABLED');
+  console.log('[GAME] ANIMATION SYNC:', ANIMATION_SYNC_INTERVAL, 'ms');
   console.log('==========================================');
   console.log('');
 
@@ -1490,6 +1626,14 @@ function spawnCreep() {
 
   });
 
+  // Синхронизация анимации спавна крипа
+  broadcastAnimation(
+    'creep_spawn',
+    { creep_id: creep.id, position: { x: creep.x, y: creep.y } },
+    '',
+    ''
+  );
+
 }
 
 
@@ -1556,6 +1700,33 @@ function playerDamage(_, data) {
     new_hp: p.hp
 
   });
+
+
+  // ==========================================================
+  // ANIMATION SYNC
+  // ==========================================================
+
+  if (p.hp <= 0) {
+    
+    // Синхронизация анимации смерти
+    broadcastAnimation(
+      'death',
+      { position: { x: p.x, y: p.y } },
+      p.id,
+      ''
+    );
+    
+  } else {
+    
+    // Синхронизация анимации получения урона
+    broadcastAnimation(
+      'hit',
+      { damage: damage, hp: p.hp },
+      '',
+      p.id
+    );
+    
+  }
 
 
   // ==========================================================
@@ -1713,6 +1884,18 @@ function respawn(id) {
     new_hp: p.hp
 
   });
+
+
+  // ==========================================================
+  // ANIMATION SYNC
+  // ==========================================================
+
+  broadcastAnimation(
+    'respawn',
+    { position: { x: p.x, y: p.y } },
+    p.id,
+    ''
+  );
 
 }
 
@@ -1907,6 +2090,14 @@ function creepDamage(_, data) {
 
     });
 
+    // Синхронизация анимации уничтожения крипа
+    broadcastAnimation(
+      'creep_destroy',
+      { creep_id: creep.id },
+      '',
+      ''
+    );
+
   }
 
 }
@@ -1965,11 +2156,13 @@ function endGame(winner) {
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
   clearInterval(playerRegenTimer);
+  clearInterval(animationSyncTimer);
 
   gameTimer = null;
   playerCheckTimer = null;
   creepTimer = null;
   playerRegenTimer = null;
+  animationSyncTimer = null;
 
 
   // ==========================================================
@@ -2169,12 +2362,14 @@ process.on('SIGINT', () => {
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
   clearInterval(playerRegenTimer);
+  clearInterval(animationSyncTimer);
 
   countdownTimer = null;
   gameTimer = null;
   playerCheckTimer = null;
   creepTimer = null;
   playerRegenTimer = null;
+  animationSyncTimer = null;
 
   process.exit(0);
 
@@ -2192,6 +2387,7 @@ process.on('SIGTERM', () => {
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
   clearInterval(playerRegenTimer);
+  clearInterval(animationSyncTimer);
 
   process.exit(0);
 
