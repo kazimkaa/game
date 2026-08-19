@@ -35,7 +35,27 @@ const CREEP_MAX_HP = 80;
 // ============================================================
 
 const players = new Map();
-const state = {};
+
+const state = {
+  status: 'lobby',
+  countdown: COUNTDOWN_TIME,
+  timer: GAME_TIME,
+  winner: 0,
+
+  blueTowerHp: 1000,
+  redTowerHp: 1000,
+
+  blueBarracksHp: 500,
+  redBarracksHp: 500,
+
+  blueBarracksDestroyed: false,
+  redBarracksDestroyed: false,
+
+  creeps: [],
+
+  nextCreepTeam: 1,
+  nextCreepId: 1
+};
 
 let countdownTimer = null;
 let gameTimer = null;
@@ -49,36 +69,26 @@ let playerRegenTimer = null;
 
 function resetState() {
 
-  Object.assign(state, {
+  state.status = 'lobby';
 
-    status: 'lobby',
+  state.countdown = COUNTDOWN_TIME;
+  state.timer = GAME_TIME;
+  state.winner = 0;
 
-    countdown: COUNTDOWN_TIME,
+  state.blueTowerHp = 1000;
+  state.redTowerHp = 1000;
 
-    timer: GAME_TIME,
+  state.blueBarracksHp = 500;
+  state.redBarracksHp = 500;
 
-    winner: 0,
+  state.blueBarracksDestroyed = false;
+  state.redBarracksDestroyed = false;
 
-    blueTowerHp: 1000,
-    redTowerHp: 1000,
+  state.creeps = [];
 
-    blueBarracksHp: 500,
-    redBarracksHp: 500,
-
-    blueBarracksDestroyed: false,
-    redBarracksDestroyed: false,
-
-    creeps: [],
-
-    nextCreepTeam: 1,
-
-    nextCreepId: 1
-
-  });
-
+  state.nextCreepTeam = 1;
+  state.nextCreepId = 1;
 }
-
-resetState();
 
 // ============================================================
 // HTTP
@@ -103,7 +113,6 @@ const server = http.createServer((req, res) => {
   });
 
   res.end('WebSocket game server');
-
 });
 
 // ============================================================
@@ -129,13 +138,8 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('MIN PLAYERS:', MIN_PLAYERS);
   console.log('COUNTDOWN:', COUNTDOWN_TIME);
   console.log('GAME TIME:', GAME_TIME);
-  console.log('PLAYER MAX HP:', PLAYER_MAX_HP);
-  console.log('PLAYER REGEN DELAY:', PLAYER_REGEN_DELAY);
-  console.log('PLAYER REGEN:', PLAYER_REGEN_AMOUNT);
-  console.log('PLAYER REGEN INTERVAL:', PLAYER_REGEN_INTERVAL);
   console.log('==========================================');
   console.log('');
-
 });
 
 // ============================================================
@@ -147,6 +151,14 @@ setInterval(() => {
   console.log(
     `[SERVER] alive | players=${players.size} | status=${state.status} | timer=${state.timer}`
   );
+
+  players.forEach((p, id) => {
+
+    console.log(
+      `[SERVER] player=${id} team=${p.team} ws=${p.ws ? 'YES' : 'NO'}`
+    );
+
+  });
 
 }, 30000);
 
@@ -160,31 +172,38 @@ function open(ws) {
     ws &&
     ws.readyState === WebSocket.OPEN
   );
-
 }
+
+// ============================================================
+// SEND
+// ============================================================
 
 function send(ws, message) {
 
   if (!open(ws)) {
-    return;
+    return false;
   }
 
   try {
 
-    ws.send(
-      JSON.stringify(message)
-    );
+    ws.send(JSON.stringify(message));
+
+    return true;
 
   } catch (error) {
 
     console.log(
-      '[SERVER] Ошибка отправки:',
+      '[SERVER] SEND ERROR:',
       error.message
     );
 
+    return false;
   }
-
 }
+
+// ============================================================
+// BROADCAST
+// ============================================================
 
 function broadcast(message, exclude = null) {
 
@@ -201,13 +220,58 @@ function broadcast(message, exclude = null) {
 
         ws.send(json);
 
-      } catch (_) {}
+      } catch (error) {
+
+        console.log(
+          '[SERVER] BROADCAST ERROR:',
+          error.message
+        );
+
+      }
+    }
+
+  });
+}
+
+// ============================================================
+// BROADCAST ONLY JOINED PLAYERS
+// ============================================================
+
+function broadcastToPlayers(message, exclude = null) {
+
+  const json = JSON.stringify(message);
+
+  players.forEach(player => {
+
+    const ws = player.ws;
+
+    if (
+      ws &&
+      ws !== exclude &&
+      open(ws)
+    ) {
+
+      try {
+
+        ws.send(json);
+
+      } catch (error) {
+
+        console.log(
+          '[SERVER] PLAYER BROADCAST ERROR:',
+          error.message
+        );
+
+      }
 
     }
 
   });
-
 }
+
+// ============================================================
+// SPAWN
+// ============================================================
 
 function spawn(team, respawn = false) {
 
@@ -218,7 +282,6 @@ function spawn(team, respawn = false) {
     y: respawn ? 450 : 500
 
   };
-
 }
 
 // ============================================================
@@ -249,18 +312,19 @@ function playersObject() {
 
       hp: p.hp,
 
-      isDead: p.isDead
+      isDead: p.isDead,
+
+      inGame: p.inGame
 
     };
 
   });
 
   return result;
-
 }
 
 // ============================================================
-// PLAYER LIST
+// SEND PLAYER LIST
 // ============================================================
 
 function sendPlayerList(ws) {
@@ -274,6 +338,10 @@ function sendPlayerList(ws) {
   });
 
 }
+
+// ============================================================
+// BROADCAST PLAYER LIST
+// ============================================================
 
 function broadcastPlayerList() {
 
@@ -295,16 +363,15 @@ function readyCount() {
 
   let count = 0;
 
-  players.forEach(p => {
+  players.forEach(player => {
 
-    if (p.inGame) {
+    if (player.inGame) {
       count++;
     }
 
   });
 
   return count;
-
 }
 
 // ============================================================
@@ -313,7 +380,11 @@ function readyCount() {
 
 wss.on('connection', ws => {
 
-  console.log('[WS] Новое WebSocket подключение');
+  console.log('');
+  console.log('==========================================');
+  console.log('[WS] NEW CONNECTION');
+  console.log('Total sockets:', wss.clients.size);
+  console.log('==========================================');
 
   ws.playerData = {
 
@@ -359,12 +430,16 @@ wss.on('connection', ws => {
 
       const data = JSON.parse(text);
 
+      console.log(
+        `[WS] MESSAGE type=${data.type || 'unknown'} id=${data.id || ws.playerData.id || 'unknown'}`
+      );
+
       route(ws, data);
 
     } catch (error) {
 
       console.log(
-        '[WS] Ошибка обработки:',
+        '[WS] MESSAGE ERROR:',
         error.message
       );
 
@@ -387,7 +462,7 @@ wss.on('connection', ws => {
   ws.on('close', () => {
 
     console.log(
-      '[WS] Соединение закрыто:',
+      '[WS] CLOSED:',
       ws.playerData?.id || 'unknown'
     );
 
@@ -402,7 +477,7 @@ wss.on('connection', ws => {
   ws.on('error', error => {
 
     console.log(
-      '[WS] Ошибка:',
+      '[WS] SOCKET ERROR:',
       error.message
     );
 
@@ -420,94 +495,69 @@ function route(ws, data) {
     return;
   }
 
-  const type = data.type;
+  const type = String(data.type || '');
 
-  if (type === 'ping') {
+  switch (type) {
 
-    send(ws, {
-      type: 'pong'
-    });
+    case 'ping':
+      send(ws, {
+        type: 'pong'
+      });
+      break;
 
-    return;
+    case 'join':
+      join(ws, data);
+      break;
+
+    case 'move':
+      move(ws, data);
+      break;
+
+    case 'animation':
+      animation(ws, data);
+      break;
+
+    case 'chat':
+      chat(ws, data);
+      break;
+
+    case 'level_ready':
+      level_ready(ws);
+      break;
+
+    case 'force_start':
+      force_start(ws);
+      break;
+
+    case 'player_damage':
+      playerDamage(ws, data);
+      break;
+
+    case 'town_damage':
+      towerDamage(ws, data);
+      break;
+
+    case 'barracks_damage':
+      barracksDamage(ws, data);
+      break;
+
+    case 'creep_damage':
+      creepDamage(ws, data);
+      break;
+
+    case 'respawn':
+      respawn(String(data.id || ''));
+      break;
+
+    default:
+
+      console.log(
+        '[SERVER] UNKNOWN TYPE:',
+        type
+      );
+
+      break;
   }
-
-  if (type === 'join') {
-
-    join(ws, data);
-
-    return;
-  }
-
-  if (type === 'move') {
-
-    move(ws, data);
-
-    return;
-  }
-
-  if (type === 'chat') {
-
-    chat(ws, data);
-
-    return;
-  }
-
-  if (type === 'level_ready') {
-
-    level_ready(ws);
-
-    return;
-  }
-
-  if (type === 'force_start') {
-
-    force_start(ws);
-
-    return;
-  }
-
-  if (type === 'player_damage') {
-
-    playerDamage(ws, data);
-
-    return;
-  }
-
-  if (type === 'town_damage') {
-
-    towerDamage(ws, data);
-
-    return;
-  }
-
-  if (type === 'barracks_damage') {
-
-    barracksDamage(ws, data);
-
-    return;
-  }
-
-  if (type === 'creep_damage') {
-
-    creepDamage(ws, data);
-
-    return;
-  }
-
-  if (type === 'respawn') {
-
-    respawn(
-      String(data.id || '')
-    );
-
-    return;
-  }
-
-  console.log(
-    '[SERVER] Неизвестный тип:',
-    type
-  );
-
 }
 
 // ============================================================
@@ -520,18 +570,40 @@ function join(ws, data) {
     data.id || ''
   ).trim();
 
+  // ==========================================================
+  // ID CHECK
+  // ==========================================================
+
   if (!id) {
 
     send(ws, {
-      type: 'error',
+
+      type: 'join_error',
+
       message: 'ID отсутствует'
+
     });
 
     return;
   }
 
   // ==========================================================
-  // НЕЛЬЗЯ ВОЙТИ ВО ВРЕМЯ ИГРЫ
+  // ALREADY JOINED ON THIS SOCKET
+  // ==========================================================
+
+  if (ws.playerData && ws.playerData.id === id) {
+
+    console.log(
+      `[JOIN] ${id} уже присоединён этим WebSocket`
+    );
+
+    sendPlayerList(ws);
+
+    return;
+  }
+
+  // ==========================================================
+  // GAME CHECK
   // ==========================================================
 
   if (
@@ -541,7 +613,7 @@ function join(ws, data) {
 
     send(ws, {
 
-      type: 'error',
+      type: 'join_error',
 
       message: 'Игра уже началась'
 
@@ -561,7 +633,7 @@ function join(ws, data) {
 
     send(ws, {
 
-      type: 'error',
+      type: 'join_error',
 
       message: 'Лобби заполнено'
 
@@ -571,20 +643,37 @@ function join(ws, data) {
   }
 
   // ==========================================================
-  // ID ЗАНЯТ
+  // SAME ID FROM ANOTHER SOCKET
   // ==========================================================
 
   if (players.has(id)) {
 
-    send(ws, {
+    const oldPlayer = players.get(id);
 
-      type: 'error',
+    console.log(
+      `[JOIN] ID ${id} уже существует`
+    );
 
-      message: 'ID занят'
+    if (
+      oldPlayer &&
+      oldPlayer.ws &&
+      oldPlayer.ws !== ws &&
+      open(oldPlayer.ws)
+    ) {
 
-    });
+      console.log(
+        `[JOIN] Закрываем старое соединение ${id}`
+      );
 
-    return;
+      try {
+
+        oldPlayer.ws.close();
+
+      } catch (_) {}
+
+    }
+
+    players.delete(id);
   }
 
   // ==========================================================
@@ -635,6 +724,8 @@ function join(ws, data) {
 
     id: id,
 
+    ws: ws,
+
     nickname: String(
       data.nickname || 'Player'
     ).slice(0, 32),
@@ -665,15 +756,20 @@ function join(ws, data) {
 
   ws.playerData = player;
 
+  // ==========================================================
+  // LOG
+  // ==========================================================
+
   console.log('');
   console.log('==========================================');
-  console.log('[JOIN]');
+  console.log('[JOIN SUCCESS]');
   console.log('ID:', id);
   console.log('Nickname:', player.nickname);
   console.log('Character:', player.character);
   console.log('Team:', player.team);
   console.log('Spawn:', player.x, player.y);
   console.log('Players:', players.size);
+  console.log('Sockets:', wss.clients.size);
   console.log('==========================================');
   console.log('');
 
@@ -687,40 +783,40 @@ function join(ws, data) {
 
     id: id,
 
+    nickname: player.nickname,
+
     team: team,
 
     x: player.x,
 
     y: player.y,
 
-    character: player.character,
-
-    nickname: player.nickname,
-
     flip: player.flip,
 
     animation: player.animation,
+
+    character: player.character,
 
     hp: player.hp
 
   });
 
   // ==========================================================
-  // ВАЖНО:
-  // СНАЧАЛА НОВОМУ КЛИЕНТУ ПОЛНЫЙ СПИСОК
+  // IMPORTANT:
+  // SEND FULL LIST TO NEW PLAYER
   // ==========================================================
 
   sendPlayerList(ws);
 
   // ==========================================================
-  // ПОТОМ ОСТАЛЬНЫМ КЛИЕНТАМ НОВОГО ИГРОКА
+  // SEND NEW PLAYER TO EVERY OLD PLAYER
   // ==========================================================
 
-  broadcast({
+  broadcastToPlayers({
 
-    type: 'spawn_player',
+    type: 'player_joined',
 
-    id: player.id,
+    id: id,
 
     nickname: player.nickname,
 
@@ -741,11 +837,14 @@ function join(ws, data) {
   }, ws);
 
   // ==========================================================
-  // ОБНОВЛЯЕМ СПИСОК ДЛЯ ВСЕХ
+  // FULL LIST TO EVERYONE
   // ==========================================================
 
   broadcastPlayerList();
 
+  console.log(
+    `[SYNC] ${id} joined. All players=${players.size}`
+  );
 }
 
 // ============================================================
@@ -777,11 +876,10 @@ function level_ready(ws) {
   );
 
   checkAllReady();
-
 }
 
 // ============================================================
-// MOVE + ANIMATION
+// MOVE
 // ============================================================
 
 function move(ws, data) {
@@ -821,7 +919,7 @@ function move(ws, data) {
 
   p.animation = animation;
 
-  broadcast({
+  broadcastToPlayers({
 
     type: 'player_moved',
 
@@ -836,7 +934,51 @@ function move(ws, data) {
     animation: p.animation
 
   }, ws);
+}
 
+// ============================================================
+// ANIMATION ONLY
+// ============================================================
+
+function animation(ws, data) {
+
+  const id = ws.playerData?.id;
+
+  if (!id) {
+    return;
+  }
+
+  const p = players.get(id);
+
+  if (!p || p.isDead) {
+    return;
+  }
+
+  let animationName = String(
+    data.animation || 'idle'
+  );
+
+  if (animationName.length > 32) {
+    animationName = animationName.slice(0, 32);
+  }
+
+  p.animation = animationName;
+
+  broadcastToPlayers({
+
+    type: 'player_moved',
+
+    id: p.id,
+
+    x: p.x,
+
+    y: p.y,
+
+    flip: p.flip,
+
+    animation: p.animation
+
+  }, ws);
 }
 
 // ============================================================
@@ -870,11 +1012,10 @@ function chat(ws, data) {
     message: message.slice(0, 300)
 
   });
-
 }
 
 // ============================================================
-// READY
+// READY CHECK
 // ============================================================
 
 function checkAllReady() {
@@ -892,11 +1033,10 @@ function checkAllReady() {
   }
 
   console.log(
-    '[GAME] Все готовы'
+    '[GAME] ALL PLAYERS READY'
   );
 
   startCountdown();
-
 }
 
 // ============================================================
@@ -963,11 +1103,9 @@ function startCountdown() {
       countdownTimer = null;
 
       startGame();
-
     }
 
   }, 1000);
-
 }
 
 // ============================================================
@@ -983,7 +1121,6 @@ function cancelCountdown() {
     );
 
     countdownTimer = null;
-
   }
 
   state.status = 'lobby';
@@ -991,9 +1128,10 @@ function cancelCountdown() {
   state.countdown = COUNTDOWN_TIME;
 
   broadcast({
-    type: 'countdown_cancel'
-  });
 
+    type: 'countdown_cancel'
+
+  });
 }
 
 // ============================================================
@@ -1018,11 +1156,12 @@ function force_start(ws) {
   }
 
   players.forEach(p => {
+
     p.inGame = true;
+
   });
 
   startCountdown();
-
 }
 
 // ============================================================
@@ -1060,17 +1199,13 @@ function startGame() {
 
   const data = playersObject();
 
-  wss.clients.forEach(ws => {
+  // ==========================================================
+  // INIT GAME INDIVIDUALLY
+  // ==========================================================
 
-    const id = ws.playerData?.id;
+  players.forEach(p => {
 
-    const p = players.get(id);
-
-    if (!p) {
-      return;
-    }
-
-    send(ws, {
+    send(p.ws, {
 
       type: 'init_game',
 
@@ -1096,8 +1231,14 @@ function startGame() {
 
   });
 
+  // ==========================================================
+  // START
+  // ==========================================================
+
   broadcast({
+
     type: 'start_game'
+
   });
 
   broadcast({
@@ -1108,6 +1249,10 @@ function startGame() {
 
   });
 
+  // ==========================================================
+  // TIMERS
+  // ==========================================================
+
   clearInterval(gameTimer);
   clearInterval(playerCheckTimer);
   clearInterval(creepTimer);
@@ -1117,6 +1262,10 @@ function startGame() {
   playerCheckTimer = null;
   creepTimer = null;
   playerRegenTimer = null;
+
+  // ==========================================================
+  // GAME TIMER
+  // ==========================================================
 
   gameTimer = setInterval(() => {
 
@@ -1155,15 +1304,27 @@ function startGame() {
 
   }, 1000);
 
+  // ==========================================================
+  // PLAYER CHECK
+  // ==========================================================
+
   playerCheckTimer = setInterval(
     checkPlayers,
     3000
   );
 
+  // ==========================================================
+  // REGEN
+  // ==========================================================
+
   playerRegenTimer = setInterval(
     regeneratePlayers,
     PLAYER_REGEN_INTERVAL
   );
+
+  // ==========================================================
+  // CREEPS
+  // ==========================================================
 
   creepTimer = setInterval(
     spawnCreep,
@@ -1172,12 +1333,11 @@ function startGame() {
 
   console.log('');
   console.log('==========================================');
-  console.log('[GAME] ИГРА НАЧАЛАСЬ');
+  console.log('[GAME] GAME STARTED');
+  console.log('[GAME] PLAYERS:', players.size);
   console.log('[GAME] TIMER:', formatTime(state.timer));
-  console.log('[GAME] PLAYER REGEN ENABLED');
   console.log('==========================================');
   console.log('');
-
 }
 
 // ============================================================
@@ -1225,10 +1385,6 @@ function regeneratePlayers() {
       return;
     }
 
-    console.log(
-      `[REGEN] ${p.id}: ${oldHp} -> ${p.hp}`
-    );
-
     broadcast({
 
       type: 'player_damage',
@@ -1240,7 +1396,6 @@ function regeneratePlayers() {
     });
 
   });
-
 }
 
 // ============================================================
@@ -1268,7 +1423,6 @@ function formatTime(seconds) {
     ':' +
     String(secs).padStart(2, '0')
   );
-
 }
 
 // ============================================================
@@ -1316,7 +1470,6 @@ function spawnCreep() {
     creep: creep
 
   });
-
 }
 
 // ============================================================
@@ -1367,6 +1520,10 @@ function playerDamage(_, data) {
 
   });
 
+  // ==========================================================
+  // DEATH
+  // ==========================================================
+
   if (p.hp <= 0) {
 
     p.hp = 0;
@@ -1374,8 +1531,6 @@ function playerDamage(_, data) {
     p.isDead = true;
 
     p.animation = 'death';
-
-    p.lastDamageTime = Date.now();
 
     broadcast({
 
@@ -1429,9 +1584,7 @@ function playerDamage(_, data) {
       );
 
     }, 3000);
-
   }
-
 }
 
 // ============================================================
@@ -1477,10 +1630,6 @@ function respawn(id) {
 
   p.lastDamageTime = Date.now();
 
-  console.log(
-    `[RESPAWN] ${p.id} | HP=${p.hp} | position=${p.x},${p.y}`
-  );
-
   broadcast({
 
     type: 'respawn',
@@ -1510,7 +1659,6 @@ function respawn(id) {
     animation: 'idle'
 
   });
-
 }
 
 // ============================================================
@@ -1564,9 +1712,7 @@ function towerDamage(_, data) {
         ? 2
         : 1
     );
-
   }
-
 }
 
 // ============================================================
@@ -1635,9 +1781,7 @@ function barracksDamage(_, data) {
           : 2
 
     });
-
   }
-
 }
 
 // ============================================================
@@ -1700,9 +1844,7 @@ function creepDamage(_, data) {
       id: creep.id
 
     });
-
   }
-
 }
 
 // ============================================================
@@ -1727,9 +1869,7 @@ function checkPlayers() {
         ? remaining.team
         : 0
     );
-
   }
-
 }
 
 // ============================================================
@@ -1801,7 +1941,6 @@ function endGame(winner) {
     resetGame,
     5000
   );
-
 }
 
 // ============================================================
@@ -1851,9 +1990,8 @@ function resetGame() {
   broadcastPlayerList();
 
   console.log(
-    '[GAME] Лобби сброшено'
+    '[GAME] LOBBY RESET'
   );
-
 }
 
 // ============================================================
@@ -1869,7 +2007,24 @@ function disconnect(ws) {
     return;
   }
 
-  if (!players.has(id)) {
+  const player =
+    players.get(id);
+
+  if (!player) {
+    return;
+  }
+
+  // ==========================================================
+  // IMPORTANT:
+  // Не удаляем нового игрока старым сокетом
+  // ==========================================================
+
+  if (player.ws !== ws) {
+
+    console.log(
+      `[DISCONNECT] OLD SOCKET IGNORED: ${id}`
+    );
+
     return;
   }
 
@@ -1898,15 +2053,12 @@ function disconnect(ws) {
   ) {
 
     cancelCountdown();
-
   }
 
   if (state.status === 'playing') {
 
     checkPlayers();
-
   }
-
 }
 
 // ============================================================
@@ -1926,7 +2078,6 @@ function stopTimers() {
   playerCheckTimer = null;
   creepTimer = null;
   playerRegenTimer = null;
-
 }
 
 // ============================================================
@@ -1936,13 +2087,12 @@ function stopTimers() {
 process.on('SIGINT', () => {
 
   console.log(
-    '[SERVER] Остановка...'
+    '[SERVER] STOP'
   );
 
   stopTimers();
 
   process.exit(0);
-
 });
 
 process.on('SIGTERM', () => {
@@ -1954,5 +2104,4 @@ process.on('SIGTERM', () => {
   stopTimers();
 
   process.exit(0);
-
 });
