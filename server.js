@@ -41,7 +41,10 @@ const CREEP_ATTACK_COOLDOWN = 1000;
 const CREEP_BARRACKS_ATTACK_RANGE = 160;
 const CREEP_SEARCH_RANGE = 380;
 const CREEP_UPDATE_INTERVAL = 50;
-const CREEP_SYNC_INTERVAL = 100; // Полная синхронизация каждые 100мс
+const CREEP_SYNC_INTERVAL = 100;
+
+// ВАЖНО: Правильные координаты для Godot
+const GROUND_Y = 0; // Земля в Godot (Y=0)
 
 // ============================================================
 // PLAYERS / STATE
@@ -64,39 +67,24 @@ let creepSyncTimer = null;
 // ============================================================
 
 function resetState() {
-
   Object.assign(state, {
-
     status: 'lobby',
-
     countdown: COUNTDOWN_TIME,
-
     timer: GAME_TIME,
-
     winner: 0,
-
     blueTowerHp: 1000,
     redTowerHp: 1000,
-
     blueBarracksHp: 500,
     redBarracksHp: 500,
-
     blueBarracksDestroyed: false,
     redBarracksDestroyed: false,
-
     creeps: [],
-
     nextCreepTeam: 1,
-
     nextCreepId: 1,
-
     animationTick: 0,
     animations: [],
-    
     lastCreepUpdate: null
-
   });
-
 }
 
 resetState();
@@ -106,25 +94,19 @@ resetState();
 // ============================================================
 
 const server = http.createServer((req, res) => {
-
   if (req.url === '/health') {
-
     res.writeHead(200, {
       'Content-Type': 'text/plain; charset=utf-8',
       'Cache-Control': 'no-cache'
     });
-
     res.end('OK');
-
     return;
   }
 
   res.writeHead(200, {
     'Content-Type': 'text/plain; charset=utf-8'
   });
-
   res.end('WebSocket game server');
-
 });
 
 // ============================================================
@@ -141,7 +123,6 @@ const wss = new WebSocket.Server({
 // ============================================================
 
 server.listen(PORT, '0.0.0.0', () => {
-
   console.log('');
   console.log('==========================================');
   console.log('GAME SERVER STARTED');
@@ -150,12 +131,6 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('MIN PLAYERS:', MIN_PLAYERS);
   console.log('COUNTDOWN:', COUNTDOWN_TIME, 'seconds');
   console.log('GAME TIME:', GAME_TIME, 'seconds');
-  console.log('GAME TIME:', GAME_TIME / 60, 'minutes');
-  console.log('');
-  console.log('PLAYER MAX HP:', PLAYER_MAX_HP);
-  console.log('PLAYER REGEN DELAY:', PLAYER_REGEN_DELAY, 'ms');
-  console.log('PLAYER REGEN:', PLAYER_REGEN_AMOUNT, 'HP');
-  console.log('PLAYER REGEN INTERVAL:', PLAYER_REGEN_INTERVAL, 'ms');
   console.log('');
   console.log('CREEP SETTINGS:');
   console.log('  SPAWN INTERVAL:', CREEP_SPAWN_INTERVAL, 'ms');
@@ -163,16 +138,9 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('  SPEED:', CREEP_SPEED);
   console.log('  DAMAGE:', CREEP_DAMAGE);
   console.log('  ATTACK RANGE:', CREEP_ATTACK_RANGE);
-  console.log('  ATTACK COOLDOWN:', CREEP_ATTACK_COOLDOWN, 'ms');
-  console.log('  BARRACKS ATTACK RANGE:', CREEP_BARRACKS_ATTACK_RANGE);
-  console.log('  SEARCH RANGE:', CREEP_SEARCH_RANGE);
-  console.log('  UPDATE INTERVAL:', CREEP_UPDATE_INTERVAL, 'ms');
-  console.log('  SYNC INTERVAL:', CREEP_SYNC_INTERVAL, 'ms');
-  console.log('');
-  console.log('ANIMATION SYNC INTERVAL:', ANIMATION_SYNC_INTERVAL, 'ms');
+  console.log('  GROUND Y:', GROUND_Y);
   console.log('==========================================');
   console.log('');
-
 });
 
 // ============================================================
@@ -180,11 +148,7 @@ server.listen(PORT, '0.0.0.0', () => {
 // ============================================================
 
 setInterval(() => {
-
-  console.log(
-    `[SERVER] alive | players=${players.size} | status=${state.status} | timer=${state.timer} | creeps=${state.creeps.length} | animTick=${state.animationTick}`
-  );
-
+  console.log(`[SERVER] alive | players=${players.size} | status=${state.status} | creeps=${state.creeps.length}`);
 }, 30000);
 
 // ============================================================
@@ -192,146 +156,79 @@ setInterval(() => {
 // ============================================================
 
 function open(ws) {
-
-  return (
-    ws &&
-    ws.readyState === WebSocket.OPEN
-  );
-
+  return ws && ws.readyState === WebSocket.OPEN;
 }
 
 function send(ws, message) {
-
-  if (!open(ws)) {
-    return;
-  }
-
+  if (!open(ws)) return;
+  
   try {
-
-    ws.send(
-      JSON.stringify(message)
-    );
-
+    ws.send(JSON.stringify(message));
   } catch (error) {
-
-    console.log(
-      '[SERVER] Ошибка отправки:',
-      error.message
-    );
-
+    console.log('[SERVER] Ошибка отправки:', error.message);
   }
-
 }
 
 function broadcast(message, exclude = null) {
-
   const json = JSON.stringify(message);
-
+  
   wss.clients.forEach(ws => {
-
-    if (
-      ws !== exclude &&
-      open(ws)
-    ) {
-
+    if (ws !== exclude && open(ws)) {
       try {
-
         ws.send(json);
-
       } catch (_) {}
-
     }
-
   });
-
 }
 
 function spawn(team, respawn = false) {
-
   return {
-
-    x: team === 1
-      ? -1500
-      : 2690,
-
-    y: respawn
-      ? 450
-      : 500
-
+    x: team === 1 ? -1500 : 2690,
+    y: GROUND_Y
   };
-
 }
 
 function playersObject() {
-
   const result = {};
-
+  
   players.forEach((p, id) => {
-
     result[id] = {
-
       nickname: p.nickname,
-
       character: p.character,
-
       x: p.x,
-
       y: p.y,
-
       flip: p.flip,
-
       team: p.team,
-
       hp: p.hp,
-
       isDead: p.isDead
-
     };
-
   });
-
+  
   return result;
-
 }
 
 function sendPlayerList(ws) {
-
   send(ws, {
-
     type: 'players_list',
-
     players: playersObject()
-
   });
-
 }
 
 function broadcastPlayerList() {
-
   broadcast({
-
     type: 'players_list',
-
     players: playersObject()
-
   });
-
 }
 
 function readyCount() {
-
   let count = 0;
-
+  
   players.forEach(p => {
-
-    if (p.inGame) {
-      count++;
-    }
-
+    if (p.inGame) count++;
   });
-
+  
   return count;
-
 }
 
 // ============================================================
@@ -339,11 +236,8 @@ function readyCount() {
 // ============================================================
 
 function syncAnimation(animData) {
+  if (!animData || typeof animData !== 'object') return null;
   
-  if (!animData || typeof animData !== 'object') {
-    return null;
-  }
-
   const animation = {
     id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     tick: state.animationTick,
@@ -353,18 +247,18 @@ function syncAnimation(animData) {
     sourceId: animData.sourceId || '',
     targetId: animData.targetId || ''
   };
-
+  
   state.animations.push(animation);
   
   if (state.animations.length > 100) {
     state.animations.shift();
   }
-
+  
   broadcast({
     type: 'animation_sync',
     animation: animation
   });
-
+  
   return animation;
 }
 
@@ -420,10 +314,7 @@ function broadcastAllCreeps() {
 }
 
 function calculateDistance(obj1, obj2) {
-  return Math.sqrt(
-    Math.pow(obj1.x - obj2.x, 2) + 
-    Math.pow(obj1.y - obj2.y, 2)
-  );
+  return Math.abs(obj1.x - obj2.x);
 }
 
 function getAttackRangeForCreep(creep, target) {
@@ -436,116 +327,127 @@ function getAttackRangeForCreep(creep, target) {
 function findTargetForCreep(creep) {
   const targets = [];
   
-  // Игроки
+  // Игроки (приоритет 1)
   players.forEach((player, playerId) => {
     if (player.team !== creep.team && !player.isDead) {
-      targets.push({
-        id: playerId,
-        type: 'player',
-        x: player.x,
-        y: player.y,
-        team: player.team,
-        priority: 1
-      });
+      const distance = Math.abs(player.x - creep.x);
+      if (distance <= creep.searchRange) {
+        targets.push({
+          id: playerId,
+          type: 'player',
+          x: player.x,
+          y: GROUND_Y,
+          team: player.team,
+          priority: 1,
+          distance: distance
+        });
+      }
     }
   });
   
-  // Крипы противника
+  // Крипы противника (приоритет 2)
   state.creeps.forEach(otherCreep => {
     if (otherCreep.team !== creep.team && !otherCreep.isDead && otherCreep.id !== creep.id) {
-      targets.push({
-        id: otherCreep.id,
-        type: 'creep',
-        x: otherCreep.x,
-        y: otherCreep.y,
-        team: otherCreep.team,
-        priority: 2
-      });
+      const distance = Math.abs(otherCreep.x - creep.x);
+      if (distance <= creep.searchRange) {
+        targets.push({
+          id: otherCreep.id,
+          type: 'creep',
+          x: otherCreep.x,
+          y: GROUND_Y,
+          team: otherCreep.team,
+          priority: 2,
+          distance: distance
+        });
+      }
     }
   });
   
-  // Казармы
+  // Казармы (приоритет 3)
   if (creep.team === 1 && !state.redBarracksDestroyed) {
-    targets.push({
-      id: 'red_barracks',
-      type: 'barracks',
-      x: 1500,
-      y: 450,
-      team: 2,
-      priority: 3
-    });
+    const distance = Math.abs(1500 - creep.x);
+    if (distance <= creep.searchRange) {
+      targets.push({
+        id: 'red_barracks',
+        type: 'barracks',
+        x: 1500,
+        y: GROUND_Y,
+        team: 2,
+        priority: 3,
+        distance: distance
+      });
+    }
   } else if (creep.team === 2 && !state.blueBarracksDestroyed) {
-    targets.push({
-      id: 'blue_barracks',
-      type: 'barracks',
-      x: -1500,
-      y: 450,
-      team: 1,
-      priority: 3
-    });
+    const distance = Math.abs(-1500 - creep.x);
+    if (distance <= creep.searchRange) {
+      targets.push({
+        id: 'blue_barracks',
+        type: 'barracks',
+        x: -1500,
+        y: GROUND_Y,
+        team: 1,
+        priority: 3,
+        distance: distance
+      });
+    }
   }
   
-  // Башни
+  // Башни (приоритет 4)
   if (creep.team === 1) {
-    targets.push({
-      id: 'red_tower',
-      type: 'tower',
-      x: 2690,
-      y: 450,
-      team: 2,
-      priority: 4
-    });
+    const distance = Math.abs(2690 - creep.x);
+    if (distance <= creep.searchRange) {
+      targets.push({
+        id: 'red_tower',
+        type: 'tower',
+        x: 2690,
+        y: GROUND_Y,
+        team: 2,
+        priority: 4,
+        distance: distance
+      });
+    }
   } else {
-    targets.push({
-      id: 'blue_tower',
-      type: 'tower',
-      x: -1500,
-      y: 450,
-      team: 1,
-      priority: 4
-    });
+    const distance = Math.abs(-1500 - creep.x);
+    if (distance <= creep.searchRange) {
+      targets.push({
+        id: 'blue_tower',
+        type: 'tower',
+        x: -1500,
+        y: GROUND_Y,
+        team: 1,
+        priority: 4,
+        distance: distance
+      });
+    }
   }
   
-  // Сортируем по приоритету и расстоянию
+  // Сортируем по приоритету, затем по расстоянию
   targets.sort((a, b) => {
     if (a.priority !== b.priority) {
       return a.priority - b.priority;
     }
-    const distA = calculateDistance(creep, a);
-    const distB = calculateDistance(creep, b);
-    return distA - distB;
+    return a.distance - b.distance;
   });
   
-  // Возвращаем ближайшую цель в пределах радиуса поиска
-  for (const target of targets) {
-    const distance = calculateDistance(creep, target);
-    if (distance <= creep.searchRange) {
-      return target;
-    }
-  }
-  
-  return null;
+  return targets.length > 0 ? targets[0] : null;
 }
 
 function moveCreepTowards(creep, target, deltaTime) {
   const dx = target.x - creep.x;
-  const dy = target.y - creep.y;
-  const distance = Math.sqrt(dx * dx + dy * dy);
+  const moveX = Math.sign(dx) * creep.speed * deltaTime;
   
-  if (distance > 0) {
-    const moveX = (dx / distance) * creep.speed * deltaTime;
-    const moveY = (dy / distance) * creep.speed * deltaTime;
-    
+  // Не проходим сквозь цель
+  if (Math.abs(dx) > Math.abs(moveX)) {
     creep.x += moveX;
-    creep.y += moveY;
-    
-    // Обновляем направление для анимации
-    creep.direction = dx > 0 ? 1 : -1;
+  } else {
+    creep.x = target.x;
   }
+  
+  creep.y = GROUND_Y;
+  creep.direction = dx > 0 ? 1 : -1;
 }
 
 function dealCreepDamage(creep, target) {
-  // Наносим урон цели
   if (target.type === 'player') {
     const player = players.get(target.id);
     if (player && !player.isDead) {
@@ -567,7 +469,6 @@ function dealCreepDamage(creep, target) {
           new_hp: 0
         });
         
-        // Автоматический респавн игрока
         setTimeout(() => {
           const currentPlayer = players.get(player.id);
           if (currentPlayer && currentPlayer.isDead && state.status === 'playing') {
@@ -664,7 +565,7 @@ function updateCreeps() {
   }
 
   const now = Date.now();
-  const deltaTime = (now - (state.lastCreepUpdate || now)) / 1000;
+  const deltaTime = Math.min((now - (state.lastCreepUpdate || now)) / 1000, 0.1);
   state.lastCreepUpdate = now;
 
   const creepsToRemove = [];
@@ -719,29 +620,38 @@ function updateCreeps() {
       creep.isAttacking = false;
       creep.animation = 'run';
       
-      // Автоматическое движение к базе противника
-      creep.x += creep.direction * creep.speed * deltaTime;
+      // Движение к вражеской базе
+      const targetX = creep.team === 1 ? 2590 : -1400;
+      const dx = targetX - creep.x;
+      const moveX = Math.sign(dx) * creep.speed * deltaTime;
+      
+      if (Math.abs(dx) > Math.abs(moveX)) {
+        creep.x += moveX;
+      } else {
+        creep.x = targetX;
+      }
+      
+      creep.y = GROUND_Y;
+      creep.direction = dx > 0 ? 1 : -1;
       
       // Проверяем достижение базы
       if (creep.team === 1 && creep.x >= 2590) {
-        // Достигли базы команды 2
         const towerTarget = {
           id: 'red_tower',
           type: 'tower',
           x: 2690,
-          y: 450,
+          y: GROUND_Y,
           team: 2
         };
         dealCreepDamage(creep, towerTarget);
         creepsToRemove.push(creep);
         creep.isDead = true;
       } else if (creep.team === 2 && creep.x <= -1400) {
-        // Достигли базы команды 1
         const towerTarget = {
           id: 'blue_tower',
           type: 'tower',
           x: -1500,
-          y: 450,
+          y: GROUND_Y,
           team: 1
         };
         dealCreepDamage(creep, towerTarget);
@@ -749,6 +659,9 @@ function updateCreeps() {
         creep.isDead = true;
       }
     }
+    
+    // Отправляем обновление позиции крипа
+    broadcastCreepUpdate(creep);
   });
 
   // Удаляем мертвых крипов
@@ -778,10 +691,8 @@ function spawnCreep() {
     return;
   }
 
-  // Проверяем, не уничтожены ли казармы
   const team = state.nextCreepTeam;
   
-  // Если казармы команды уничтожены, пропускаем спавн
   if (team === 1 && state.blueBarracksDestroyed) {
     state.nextCreepTeam = 2;
     return;
@@ -792,14 +703,13 @@ function spawnCreep() {
     return;
   }
 
-  // Создаем крипа
   const creep = {
     id: `creep_${state.nextCreepId++}`,
     team: team,
     hp: CREEP_MAX_HP,
     maxHp: CREEP_MAX_HP,
     x: team === 1 ? -1400 : 2590,
-    y: 450,
+    y: GROUND_Y,
     targetId: null,
     isAttacking: false,
     attackCooldown: 0,
@@ -815,17 +725,13 @@ function spawnCreep() {
   };
 
   state.creeps.push(creep);
-  
-  // Переключаем команду для следующего спавна
   state.nextCreepTeam = team === 1 ? 2 : 1;
 
-  // Отправляем спавн крипа всем клиентам
   broadcast({
     type: 'creep_spawn',
     creep: getCreepData(creep)
   });
 
-  // Синхронизация анимации спавна
   broadcastAnimation(
     'creep_spawn',
     { 
@@ -837,7 +743,7 @@ function spawnCreep() {
     ''
   );
 
-  console.log(`[CREEP] Спавн крипа ${creep.id} для команды ${team}`);
+  console.log(`[CREEP] Спавн крипа ${creep.id} для команды ${team} на X=${creep.x}`);
 }
 
 // ============================================================
@@ -845,7 +751,6 @@ function spawnCreep() {
 // ============================================================
 
 wss.on('connection', ws => {
-
   console.log('[WS] Новое WebSocket подключение');
 
   ws.playerData = {
@@ -853,7 +758,7 @@ wss.on('connection', ws => {
     nickname: 'Player',
     character: 1,
     x: 0,
-    y: 500,
+    y: GROUND_Y,
     flip: false,
     team: 0,
     hp: PLAYER_MAX_HP,
@@ -885,7 +790,6 @@ wss.on('connection', ws => {
   ws.on('error', error => {
     console.log('[WS] Ошибка:', error.message);
   });
-
 });
 
 // ============================================================
@@ -956,8 +860,6 @@ function route(ws, data) {
     const animData = data.animation_data || {};
     const sourceId = String(data.source_id || ws.playerData?.id || '');
     const targetId = String(data.target_id || '');
-    
-    console.log(`[ANIM] ${sourceId} -> ${animType} -> ${targetId || 'all'}`);
     
     broadcastAnimation(animType, animData, sourceId, targetId);
     return;
