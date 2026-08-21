@@ -34,9 +34,7 @@ const CREEP_ATTACK_RANGE = 80;
 const CREEP_ATTACK_COOLDOWN = 1000;
 const CREEP_BARRACKS_ATTACK_RANGE = 160;
 const CREEP_SEARCH_RANGE = 380;
-const CREEP_UPDATE_INTERVAL = 50;
 const CREEP_SYNC_INTERVAL = 100;
-const CREEP_ATTACK_ANIMATION_DURATION = 500;
 
 const GROUND_Y = 0;
 
@@ -51,11 +49,10 @@ let playerCheckTimer = null;
 let creepTimer = null;
 let playerRegenTimer = null;
 let animationSyncTimer = null;
-let creepUpdateTimer = null;
 let creepSyncTimer = null;
 
 // ============================================================
-// STATE INITIALIZATION
+// STATE
 // ============================================================
 function resetState() {
   Object.assign(state, {
@@ -73,8 +70,7 @@ function resetState() {
     nextCreepTeam: 1,
     nextCreepId: 1,
     animationTick: 0,
-    animations: [],
-    lastCreepUpdate: null
+    animations: []
   });
 }
 resetState();
@@ -99,7 +95,7 @@ const server = http.createServer((req, res) => {
 });
 
 // ============================================================
-// WEBSOCKET SERVER
+// WEBSOCKET
 // ============================================================
 const wss = new WebSocket.Server({
   server: server,
@@ -261,15 +257,7 @@ function getCreepData(creep) {
     maxHp: creep.maxHp,
     x: creep.x,
     y: creep.y,
-    targetId: creep.targetId,
-    isAttacking: creep.isAttacking,
-    isDead: creep.isDead,
-    speed: creep.speed,
-    damage: creep.damage,
-    attackRange: creep.attackRange,
-    barracksAttackRange: creep.barracksAttackRange,
-    direction: creep.direction,
-    animation: creep.animation
+    direction: creep.direction
   };
 }
 
@@ -277,382 +265,10 @@ function getAllCreepsData() {
   return state.creeps.map(creep => getCreepData(creep));
 }
 
-function broadcastCreepUpdate(creep) {
-  broadcast({
-    type: 'creep_update',
-    creep: getCreepData(creep)
-  });
-}
-
 function broadcastAllCreeps() {
   broadcast({
     type: 'creeps_sync',
     creeps: getAllCreepsData()
-  });
-}
-
-function calculateDistance(obj1, obj2) {
-  return Math.abs(obj1.x - obj2.x);
-}
-
-function getAttackRangeForCreep(creep, target) {
-  if (target.type === 'barracks') {
-    return creep.barracksAttackRange;
-  }
-  return creep.attackRange;
-}
-
-function findTargetForCreep(creep) {
-  const targets = [];
-
-  // Игроки (приоритет 1)
-  players.forEach((player, playerId) => {
-    if (player.team !== creep.team && !player.isDead) {
-      const distance = Math.abs(player.x - creep.x);
-      if (distance <= creep.searchRange) {
-        targets.push({
-          id: playerId,
-          type: 'player',
-          x: player.x,
-          y: GROUND_Y,
-          team: player.team,
-          priority: 1,
-          distance: distance
-        });
-      }
-    }
-  });
-
-  // Крипы противника (приоритет 2)
-  state.creeps.forEach(otherCreep => {
-    if (otherCreep.team !== creep.team && !otherCreep.isDead && otherCreep.id !== creep.id) {
-      const distance = Math.abs(otherCreep.x - creep.x);
-      if (distance <= creep.searchRange) {
-        targets.push({
-          id: otherCreep.id,
-          type: 'creep',
-          x: otherCreep.x,
-          y: GROUND_Y,
-          team: otherCreep.team,
-          priority: 2,
-          distance: distance
-        });
-      }
-    }
-  });
-
-  // Казармы (приоритет 3)
-  if (creep.team === 1 && !state.redBarracksDestroyed) {
-    const distance = Math.abs(1500 - creep.x);
-    if (distance <= creep.searchRange) {
-      targets.push({
-        id: 'red_barracks',
-        type: 'barracks',
-        x: 1500,
-        y: GROUND_Y,
-        team: 2,
-        priority: 3,
-        distance: distance
-      });
-    }
-  } else if (creep.team === 2 && !state.blueBarracksDestroyed) {
-    const distance = Math.abs(-1500 - creep.x);
-    if (distance <= creep.searchRange) {
-      targets.push({
-        id: 'blue_barracks',
-        type: 'barracks',
-        x: -1500,
-        y: GROUND_Y,
-        team: 1,
-        priority: 3,
-        distance: distance
-      });
-    }
-  }
-
-  // Башни (приоритет 4)
-  if (creep.team === 1) {
-    const distance = Math.abs(2690 - creep.x);
-    if (distance <= creep.searchRange) {
-      targets.push({
-        id: 'red_tower',
-        type: 'tower',
-        x: 2690,
-        y: GROUND_Y,
-        team: 2,
-        priority: 4,
-        distance: distance
-      });
-    }
-  } else {
-    const distance = Math.abs(-1500 - creep.x);
-    if (distance <= creep.searchRange) {
-      targets.push({
-        id: 'blue_tower',
-        type: 'tower',
-        x: -1500,
-        y: GROUND_Y,
-        team: 1,
-        priority: 4,
-        distance: distance
-      });
-    }
-  }
-
-  // Сортируем по приоритету, затем по расстоянию
-  targets.sort((a, b) => {
-    if (a.priority !== b.priority) {
-      return a.priority - b.priority;
-    }
-    return a.distance - b.distance;
-  });
-
-  return targets.length > 0 ? targets[0] : null;
-}
-
-function moveCreepTowards(creep, target, deltaTime) {
-  const dx = target.x - creep.x;
-  const moveX = Math.sign(dx) * creep.speed * deltaTime;
-
-  if (Math.abs(dx) > Math.abs(moveX)) {
-    creep.x += moveX;
-  } else {
-    creep.x = target.x;
-  }
-
-  creep.y = GROUND_Y;
-  creep.direction = dx > 0 ? 1 : -1;
-}
-
-function dealCreepDamage(creep, target) {
-  if (target.type === 'player') {
-    const player = players.get(target.id);
-    if (player && !player.isDead) {
-      player.hp = Math.max(0, player.hp - creep.damage);
-      player.lastDamageTime = Date.now();
-
-      broadcast({
-        type: 'player_damage',
-        target_id: player.id,
-        new_hp: player.hp
-      });
-
-      if (player.hp <= 0) {
-        player.isDead = true;
-
-        broadcast({
-          type: 'player_damage',
-          target_id: player.id,
-          new_hp: 0
-        });
-
-        setTimeout(() => {
-          const currentPlayer = players.get(player.id);
-          if (currentPlayer && currentPlayer.isDead && state.status === 'playing') {
-            respawn(currentPlayer.id);
-          }
-        }, 3000);
-      }
-    }
-  } else if (target.type === 'creep') {
-    const targetCreep = state.creeps.find(c => c.id === target.id);
-    if (targetCreep && !targetCreep.isDead) {
-      targetCreep.hp = Math.max(0, targetCreep.hp - creep.damage);
-
-      broadcast({
-        type: 'creep_damage',
-        id: targetCreep.id,
-        new_hp: targetCreep.hp
-      });
-
-      if (targetCreep.hp <= 0) {
-        targetCreep.isDead = true;
-      }
-    }
-  } else if (target.type === 'barracks') {
-    if (target.team === 1) {
-      state.blueBarracksHp = Math.max(0, state.blueBarracksHp - creep.damage);
-
-      broadcast({
-        type: 'barracks_damage',
-        barracks_id: 1,
-        new_hp: state.blueBarracksHp
-      });
-
-      if (state.blueBarracksHp <= 0 && !state.blueBarracksDestroyed) {
-        state.blueBarracksDestroyed = true;
-        broadcast({
-          type: 'barracks_destroyed',
-          barracks_id: 1
-        });
-      }
-    } else {
-      state.redBarracksHp = Math.max(0, state.redBarracksHp - creep.damage);
-
-      broadcast({
-        type: 'barracks_damage',
-        barracks_id: 2,
-        new_hp: state.redBarracksHp
-      });
-
-      if (state.redBarracksHp <= 0 && !state.redBarracksDestroyed) {
-        state.redBarracksDestroyed = true;
-        broadcast({
-          type: 'barracks_destroyed',
-          barracks_id: 2
-        });
-      }
-    }
-  } else if (target.type === 'tower') {
-    if (target.team === 1) {
-      state.blueTowerHp = Math.max(0, state.blueTowerHp - creep.damage);
-
-      broadcast({
-        type: 'tower_damage',
-        town_id: 1,
-        new_hp: state.blueTowerHp
-      });
-
-      if (state.blueTowerHp <= 0) {
-        endGame(2);
-      }
-    } else {
-      state.redTowerHp = Math.max(0, state.redTowerHp - creep.damage);
-
-      broadcast({
-        type: 'tower_damage',
-        town_id: 2,
-        new_hp: state.redTowerHp
-      });
-
-      if (state.redTowerHp <= 0) {
-        endGame(1);
-      }
-    }
-  }
-}
-
-// ============================================================
-// UPDATE CREEPS (SERVER AUTHORITATIVE)
-// ============================================================
-function updateCreeps() {
-  if (state.status !== 'playing') {
-    return;
-  }
-
-  const now = Date.now();
-  const deltaTime = Math.min((now - (state.lastCreepUpdate || now)) / 1000, 0.1);
-  state.lastCreepUpdate = now;
-
-  const creepsToRemove = [];
-
-  state.creeps.forEach(creep => {
-    if (creep.isDead) {
-      creepsToRemove.push(creep);
-      return;
-    }
-
-    // Завершаем анимацию атаки
-    if (creep.isAttacking) {
-      if (now - creep.attackStartTime >= CREEP_ATTACK_ANIMATION_DURATION) {
-        creep.isAttacking = false;
-        creep.animation = 'run';
-      }
-    }
-
-    // Пока идёт анимация атаки — только стоим на месте
-    if (!creep.isAttacking) {
-      const target = findTargetForCreep(creep);
-
-      if (target) {
-        creep.targetId = target.id;
-
-        const distance = calculateDistance(creep, target);
-        const attackRange = getAttackRangeForCreep(creep, target);
-
-        if (distance <= attackRange) {
-          // Атакуем ТОЛЬКО если прошёл полный кулдаун
-          if (now - (creep.lastAttackTime || 0) >= CREEP_ATTACK_COOLDOWN) {
-            creep.isAttacking = true;
-            creep.lastAttackTime = now;
-            creep.attackStartTime = now;
-            creep.animation = 'attack';
-
-            // Урон наносится строго один раз за атаку
-            dealCreepDamage(creep, target);
-          }
-          // иначе просто стоим и ждём кулдауна
-        } else {
-          // Идём к цели
-          moveCreepTowards(creep, target, deltaTime);
-          creep.animation = 'run';
-        }
-      } else {
-        // Нет цели — идём к базе противника
-        creep.targetId = null;
-        creep.animation = 'run';
-
-        const targetX = creep.team === 1 ? 2590 : -1400;
-        const dx = targetX - creep.x;
-        const moveX = Math.sign(dx) * creep.speed * deltaTime;
-
-        if (Math.abs(dx) > Math.abs(moveX)) {
-          creep.x += moveX;
-        } else {
-          creep.x = targetX;
-        }
-
-        creep.y = GROUND_Y;
-        creep.direction = dx > 0 ? 1 : -1;
-
-        // Достигли базы — один раз бьём башню и умираем
-        if (creep.team === 1 && creep.x >= 2590) {
-          const towerTarget = {
-            id: 'red_tower',
-            type: 'tower',
-            x: 2690,
-            y: GROUND_Y,
-            team: 2
-          };
-          dealCreepDamage(creep, towerTarget);
-          creepsToRemove.push(creep);
-          creep.isDead = true;
-        } else if (creep.team === 2 && creep.x <= -1400) {
-          const towerTarget = {
-            id: 'blue_tower',
-            type: 'tower',
-            x: -1500,
-            y: GROUND_Y,
-            team: 1
-          };
-          dealCreepDamage(creep, towerTarget);
-          creepsToRemove.push(creep);
-          creep.isDead = true;
-        }
-      }
-    }
-
-    // Всегда отправляем актуальное состояние
-    if (!creep.isDead) {
-      broadcastCreepUpdate(creep);
-    }
-  });
-
-  // Удаляем мёртвых
-  creepsToRemove.forEach(creep => {
-    state.creeps = state.creeps.filter(c => c.id !== creep.id);
-
-    broadcast({
-      type: 'creep_destroy',
-      id: creep.id
-    });
-
-    broadcastAnimation(
-      'creep_destroy',
-      { creep_id: creep.id },
-      '',
-      ''
-    );
   });
 }
 
@@ -683,19 +299,7 @@ function spawnCreep() {
     maxHp: CREEP_MAX_HP,
     x: team === 1 ? -1400 : 2590,
     y: GROUND_Y,
-    targetId: null,
-    isAttacking: false,
-    lastAttackTime: 0,
-    attackStartTime: 0,
-    isDead: false,
-    speed: CREEP_SPEED,
-    damage: CREEP_DAMAGE,
-    attackRange: CREEP_ATTACK_RANGE,
-    barracksAttackRange: CREEP_BARRACKS_ATTACK_RANGE,
-    searchRange: CREEP_SEARCH_RANGE,
-    direction: team === 1 ? 1 : -1,
-    animation: 'run',
-    lastUpdateTime: Date.now()
+    direction: team === 1 ? 1 : -1
   };
 
   state.creeps.push(creep);
@@ -821,6 +425,11 @@ function route(ws, data) {
 
   if (type === 'creep_damage') {
     creepDamage(ws, data);
+    return;
+  }
+
+  if (type === 'creep_position_update') {
+    creepPositionUpdate(ws, data);
     return;
   }
 
@@ -1153,7 +762,6 @@ function startGame() {
   clearInterval(creepTimer);
   clearInterval(playerRegenTimer);
   clearInterval(animationSyncTimer);
-  clearInterval(creepUpdateTimer);
   clearInterval(creepSyncTimer);
 
   gameTimer = null;
@@ -1161,7 +769,6 @@ function startGame() {
   creepTimer = null;
   playerRegenTimer = null;
   animationSyncTimer = null;
-  creepUpdateTimer = null;
   creepSyncTimer = null;
 
   // Запускаем игровой таймер
@@ -1195,9 +802,6 @@ function startGame() {
 
   // Спавн крипов
   creepTimer = setInterval(spawnCreep, CREEP_SPAWN_INTERVAL);
-
-  // Обновление позиций крипов
-  creepUpdateTimer = setInterval(updateCreeps, CREEP_UPDATE_INTERVAL);
 
   // Полная синхронизация крипов
   creepSyncTimer = setInterval(() => {
@@ -1415,6 +1019,31 @@ function creepDamage(_, data) {
 }
 
 // ============================================================
+// CREEP POSITION UPDATE (от клиентов)
+// ============================================================
+function creepPositionUpdate(_, data) {
+  if (state.status !== 'playing') return;
+
+  const id = String(data.id || '');
+  const creep = state.creeps.find(item => item.id === id);
+
+  if (!creep) return;
+
+  if (data.x !== undefined) creep.x = Number(data.x);
+  if (data.y !== undefined) creep.y = Number(data.y);
+  if (data.direction !== undefined) creep.direction = Number(data.direction);
+
+  // Отправляем обновление всем остальным клиентам
+  broadcast({
+    type: 'creep_position_update',
+    id: creep.id,
+    x: creep.x,
+    y: creep.y,
+    direction: creep.direction
+  });
+}
+
+// ============================================================
 // CHECK PLAYERS
 // ============================================================
 function checkPlayers() {
@@ -1441,7 +1070,6 @@ function endGame(winner) {
   clearInterval(creepTimer);
   clearInterval(playerRegenTimer);
   clearInterval(animationSyncTimer);
-  clearInterval(creepUpdateTimer);
   clearInterval(creepSyncTimer);
 
   gameTimer = null;
@@ -1449,7 +1077,6 @@ function endGame(winner) {
   creepTimer = null;
   playerRegenTimer = null;
   animationSyncTimer = null;
-  creepUpdateTimer = null;
   creepSyncTimer = null;
 
   broadcast({
@@ -1549,7 +1176,6 @@ process.on('SIGINT', () => {
   clearInterval(creepTimer);
   clearInterval(playerRegenTimer);
   clearInterval(animationSyncTimer);
-  clearInterval(creepUpdateTimer);
   clearInterval(creepSyncTimer);
 
   process.exit(0);
@@ -1564,7 +1190,6 @@ process.on('SIGTERM', () => {
   clearInterval(creepTimer);
   clearInterval(playerRegenTimer);
   clearInterval(animationSyncTimer);
-  clearInterval(creepUpdateTimer);
   clearInterval(creepSyncTimer);
 
   process.exit(0);
