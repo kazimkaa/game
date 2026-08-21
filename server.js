@@ -31,15 +31,14 @@ const CREEP_MAX_HP = 80;
 const CREEP_SPEED = 80;
 const CREEP_DAMAGE = 20;
 const CREEP_ATTACK_RANGE = 80;
-const CREEP_ATTACK_COOLDOWN = 1000; // 1 секунда между атаками
+const CREEP_ATTACK_COOLDOWN = 1000;
 const CREEP_BARRACKS_ATTACK_RANGE = 160;
 const CREEP_SEARCH_RANGE = 380;
 const CREEP_UPDATE_INTERVAL = 50;
 const CREEP_SYNC_INTERVAL = 100;
-const CREEP_ATTACK_ANIMATION_DURATION = 500; // Длительность анимации атаки
+const CREEP_ATTACK_ANIMATION_DURATION = 500;
 
-// ВАЖНО: Правильные координаты для Godot
-const GROUND_Y = 0; // Земля в Godot (Y=0)
+const GROUND_Y = 0;
 
 // ============================================================
 // PLAYERS / STATE
@@ -56,7 +55,7 @@ let creepUpdateTimer = null;
 let creepSyncTimer = null;
 
 // ============================================================
-// STATE
+// STATE INITIALIZATION
 // ============================================================
 function resetState() {
   Object.assign(state, {
@@ -100,7 +99,7 @@ const server = http.createServer((req, res) => {
 });
 
 // ============================================================
-// WEBSOCKET
+// WEBSOCKET SERVER
 // ============================================================
 const wss = new WebSocket.Server({
   server: server,
@@ -148,7 +147,6 @@ function open(ws) {
 
 function send(ws, message) {
   if (!open(ws)) return;
-
   try {
     ws.send(JSON.stringify(message));
   } catch (error) {
@@ -158,7 +156,6 @@ function send(ws, message) {
 
 function broadcast(message, exclude = null) {
   const json = JSON.stringify(message);
-
   wss.clients.forEach(ws => {
     if (ws !== exclude && open(ws)) {
       try {
@@ -177,7 +174,6 @@ function spawn(team, respawn = false) {
 
 function playersObject() {
   const result = {};
-
   players.forEach((p, id) => {
     result[id] = {
       nickname: p.nickname,
@@ -190,7 +186,6 @@ function playersObject() {
       isDead: p.isDead
     };
   });
-
   return result;
 }
 
@@ -210,11 +205,9 @@ function broadcastPlayerList() {
 
 function readyCount() {
   let count = 0;
-
   players.forEach(p => {
     if (p.inGame) count++;
   });
-
   return count;
 }
 
@@ -421,7 +414,6 @@ function moveCreepTowards(creep, target, deltaTime) {
   const dx = target.x - creep.x;
   const moveX = Math.sign(dx) * creep.speed * deltaTime;
 
-  // Не проходим сквозь цель
   if (Math.abs(dx) > Math.abs(moveX)) {
     creep.x += moveX;
   } else {
@@ -541,7 +533,7 @@ function dealCreepDamage(creep, target) {
 }
 
 // ============================================================
-// UPDATE CREEPS (SERVER AUTHORITATIVE) - ИСПРАВЛЕННАЯ ВЕРСИЯ
+// UPDATE CREEPS (SERVER AUTHORITATIVE)
 // ============================================================
 function updateCreeps() {
   if (state.status !== 'playing') {
@@ -693,7 +685,7 @@ function spawnCreep() {
     y: GROUND_Y,
     targetId: null,
     isAttacking: false,
-    lastAttackTime: 0,          // ← исправлено
+    lastAttackTime: 0,
     attackStartTime: 0,
     isDead: false,
     speed: CREEP_SPEED,
@@ -1258,16 +1250,6 @@ function regeneratePlayers() {
       new_hp: p.hp
     });
   });
-}
-
-// ============================================================
-// FORMAT TIME
-// ============================================================
-function formatTime(seconds) {
-  const safeSeconds = Math.max(0, Number(seconds) || 0);
-  const minutes = Math.floor(safeSeconds / 60);
-  const secs = safeSeconds % 60;
-  return String(minutes).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
 }
 
 // ============================================================
