@@ -37,11 +37,12 @@ const CREEP_MAX_HP = 80;
 const CREEP_SPEED = 80;
 const CREEP_DAMAGE = 20;
 const CREEP_ATTACK_RANGE = 80;
-const CREEP_ATTACK_COOLDOWN = 1000;
+const CREEP_ATTACK_COOLDOWN = 1000; // 1 секунда между атаками
 const CREEP_BARRACKS_ATTACK_RANGE = 160;
 const CREEP_SEARCH_RANGE = 380;
 const CREEP_UPDATE_INTERVAL = 50;
 const CREEP_SYNC_INTERVAL = 100;
+const CREEP_ATTACK_ANIMATION_DURATION = 500; // Длительность анимации атаки
 
 // ВАЖНО: Правильные координаты для Godot
 const GROUND_Y = 0; // Земля в Godot (Y=0)
@@ -138,6 +139,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('  SPEED:', CREEP_SPEED);
   console.log('  DAMAGE:', CREEP_DAMAGE);
   console.log('  ATTACK RANGE:', CREEP_ATTACK_RANGE);
+  console.log('  ATTACK COOLDOWN:', CREEP_ATTACK_COOLDOWN, 'ms');
   console.log('  GROUND Y:', GROUND_Y);
   console.log('==========================================');
   console.log('');
@@ -556,7 +558,7 @@ function dealCreepDamage(creep, target) {
 }
 
 // ============================================================
-// UPDATE CREEPS (SERVER AUTHORITATIVE)
+// UPDATE CREEPS (SERVER AUTHORITATIVE) - ИСПРАВЛЕННАЯ ВЕРСИЯ
 // ============================================================
 
 function updateCreeps() {
@@ -581,6 +583,17 @@ function updateCreeps() {
       creep.attackCooldown = Math.max(0, creep.attackCooldown - (deltaTime * 1000));
     }
 
+    // Если крип в процессе атаки, проверяем таймер анимации
+    if (creep.isAttacking) {
+      if (Date.now() - creep.attackStartTime >= CREEP_ATTACK_ANIMATION_DURATION) {
+        creep.isAttacking = false;
+        creep.animation = 'run';
+      } else {
+        // Крип все еще в анимации атаки, не двигаемся
+        return;
+      }
+    }
+
     // Находим цель
     const target = findTargetForCreep(creep);
     
@@ -595,18 +608,11 @@ function updateCreeps() {
         if (creep.attackCooldown <= 0 && !creep.isAttacking) {
           creep.isAttacking = true;
           creep.attackCooldown = CREEP_ATTACK_COOLDOWN;
+          creep.attackStartTime = Date.now();
           creep.animation = 'attack';
           
-          // Наносим урон цели
+          // Наносим урон цели ОДИН РАЗ
           dealCreepDamage(creep, target);
-          
-          // Сбрасываем атаку через 500мс
-          setTimeout(() => {
-            if (creep && !creep.isDead) {
-              creep.isAttacking = false;
-              creep.animation = 'run';
-            }
-          }, 500);
         }
       } else {
         // Двигаемся к цели
@@ -713,6 +719,7 @@ function spawnCreep() {
     targetId: null,
     isAttacking: false,
     attackCooldown: 0,
+    attackStartTime: 0,
     isDead: false,
     speed: CREEP_SPEED,
     damage: CREEP_DAMAGE,
@@ -1235,393 +1242,4 @@ function startGame() {
   
   // Полная синхронизация крипов
   creepSyncTimer = setInterval(() => {
-    if (state.status === 'playing') {
-      broadcastAllCreeps();
-    }
-  }, CREEP_SYNC_INTERVAL);
-  
-  // Синхронизация анимаций
-  animationSyncTimer = setInterval(() => {
-    if (state.status !== 'playing') return;
-    
-    state.animationTick++;
-    broadcast({
-      type: 'animation_tick',
-      tick: state.animationTick,
-      serverTime: Date.now()
-    });
-  }, ANIMATION_SYNC_INTERVAL);
-  
-  console.log('[GAME] ИГРА НАЧАЛАСЬ');
-  console.log(`[GAME] Крипы будут спавниться каждые ${CREEP_SPAWN_INTERVAL}мс`);
-}
-
-// ============================================================
-// SERVER PLAYER REGENERATION
-// ============================================================
-
-function regeneratePlayers() {
-  if (state.status !== 'playing') return;
-  
-  const now = Date.now();
-  players.forEach(p => {
-    if (p.isDead) return;
-    if (p.hp >= PLAYER_MAX_HP) {
-      p.hp = PLAYER_MAX_HP;
-      return;
-    }
-    
-    const elapsed = now - Number(p.lastDamageTime || now);
-    if (elapsed < PLAYER_REGEN_DELAY) return;
-    
-    const oldHp = p.hp;
-    p.hp = Math.min(PLAYER_MAX_HP, p.hp + PLAYER_REGEN_AMOUNT);
-    
-    if (p.hp === oldHp) return;
-    
-    broadcast({
-      type: 'player_damage',
-      target_id: p.id,
-      new_hp: p.hp
-    });
-  });
-}
-
-// ============================================================
-// FORMAT TIME
-// ============================================================
-
-function formatTime(seconds) {
-  const safeSeconds = Math.max(0, Number(seconds) || 0);
-  const minutes = Math.floor(safeSeconds / 60);
-  const secs = safeSeconds % 60;
-  return String(minutes).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
-}
-
-// ============================================================
-// PLAYER DAMAGE
-// ============================================================
-
-function playerDamage(_, data) {
-  if (state.status !== 'playing') return;
-  
-  const id = String(data.target_id || '');
-  const p = players.get(id);
-  if (!p || p.isDead) return;
-  
-  const damage = Math.max(0, Number(data.damage) || 10);
-  
-  p.hp = Math.max(0, p.hp - damage);
-  p.lastDamageTime = Date.now();
-  
-  broadcast({
-    type: 'player_damage',
-    target_id: p.id,
-    new_hp: p.hp
-  });
-  
-  if (p.hp <= 0) {
-    p.hp = 0;
-    p.isDead = true;
-    p.lastDamageTime = Date.now();
-    
-    broadcast({
-      type: 'player_damage',
-      target_id: p.id,
-      new_hp: 0
-    });
-    
-    setTimeout(() => {
-      const currentPlayer = players.get(p.id);
-      if (!currentPlayer) return;
-      if (state.status !== 'playing') return;
-      if (!currentPlayer.isDead) return;
-      respawn(currentPlayer.id);
-    }, 3000);
-  }
-}
-
-// ============================================================
-// RESPAWN
-// ============================================================
-
-function respawn(id) {
-  const p = players.get(String(id || ''));
-  if (!p) return;
-  if (state.status !== 'playing') return;
-  if (!p.isDead) return;
-  
-  const position = spawn(p.team, true);
-  
-  p.hp = PLAYER_MAX_HP;
-  p.isDead = false;
-  p.x = position.x;
-  p.y = position.y;
-  p.flip = false;
-  p.lastDamageTime = Date.now();
-  
-  broadcast({
-    type: 'respawn',
-    id: p.id,
-    x: p.x,
-    y: p.y,
-    hp: p.hp
-  });
-  
-  broadcast({
-    type: 'player_damage',
-    target_id: p.id,
-    new_hp: p.hp
-  });
-  
-  broadcastAnimation('respawn', { position: { x: p.x, y: p.y } }, p.id, '');
-}
-
-// ============================================================
-// TOWER DAMAGE
-// ============================================================
-
-function towerDamage(_, data) {
-  if (state.status !== 'playing') return;
-  
-  const blue = Number(data.town_id) === 1;
-  const key = blue ? 'blueTowerHp' : 'redTowerHp';
-  const damage = Math.max(0, Number(data.damage) || 10);
-  
-  state[key] = Math.max(0, state[key] - damage);
-  
-  broadcast({
-    type: 'tower_damage',
-    town_id: blue ? 1 : 2,
-    new_hp: state[key]
-  });
-  
-  if (state[key] <= 0) {
-    endGame(blue ? 2 : 1);
-  }
-}
-
-// ============================================================
-// BARRACKS DAMAGE
-// ============================================================
-
-function barracksDamage(_, data) {
-  if (state.status !== 'playing') return;
-  
-  const blue = Number(data.barracks_id) === 1;
-  const hpKey = blue ? 'blueBarracksHp' : 'redBarracksHp';
-  const deadKey = blue ? 'blueBarracksDestroyed' : 'redBarracksDestroyed';
-  const damage = Math.max(0, Number(data.damage) || 10);
-  
-  state[hpKey] = Math.max(0, state[hpKey] - damage);
-  
-  broadcast({
-    type: 'barracks_damage',
-    barracks_id: blue ? 1 : 2,
-    new_hp: state[hpKey]
-  });
-  
-  if (state[hpKey] <= 0 && !state[deadKey]) {
-    state[deadKey] = true;
-    
-    broadcast({
-      type: 'barracks_destroyed',
-      barracks_id: blue ? 1 : 2
-    });
-  }
-}
-
-// ============================================================
-// CREEP DAMAGE (от клиентов)
-// ============================================================
-
-function creepDamage(_, data) {
-  if (state.status !== 'playing') return;
-  
-  const id = String(data.id || '');
-  const creep = state.creeps.find(item => item.id === id);
-  
-  if (!creep) return;
-  
-  const damage = Math.max(0, Number(data.damage) || 10);
-  
-  creep.hp = Math.max(0, creep.hp - damage);
-  
-  broadcast({
-    type: 'creep_damage',
-    id: creep.id,
-    new_hp: creep.hp
-  });
-  
-  if (creep.hp <= 0) {
-    creep.isDead = true;
-    
-    broadcast({
-      type: 'creep_destroy',
-      id: creep.id
-    });
-    
-    broadcastAnimation('creep_destroy', { creep_id: creep.id }, '', '');
-  }
-}
-
-// ============================================================
-// CHECK PLAYERS
-// ============================================================
-
-function checkPlayers() {
-  if (state.status !== 'playing') return;
-  
-  if (players.size < MIN_PLAYERS) {
-    const remaining = players.size > 0 ? [...players.values()][0] : null;
-    endGame(remaining ? remaining.team : 0);
-  }
-}
-
-// ============================================================
-// END GAME
-// ============================================================
-
-function endGame(winner) {
-  if (state.status !== 'playing') return;
-  
-  state.status = 'finished';
-  state.winner = winner;
-  state.timer = 0;
-  
-  clearInterval(gameTimer);
-  clearInterval(playerCheckTimer);
-  clearInterval(creepTimer);
-  clearInterval(playerRegenTimer);
-  clearInterval(animationSyncTimer);
-  clearInterval(creepUpdateTimer);
-  clearInterval(creepSyncTimer);
-  
-  gameTimer = null;
-  playerCheckTimer = null;
-  creepTimer = null;
-  playerRegenTimer = null;
-  animationSyncTimer = null;
-  creepUpdateTimer = null;
-  creepSyncTimer = null;
-  
-  broadcast({
-    type: 'countdown_update',
-    time: 0
-  });
-  
-  const result = winner === 0 ? 'НИЧЬЯ!' : `ПОБЕДА КОМАНДЫ ${winner}!`;
-  
-  broadcast({
-    type: 'chat',
-    sender: 'СИСТЕМА',
-    message: result
-  });
-  
-  broadcast({
-    type: 'game_over',
-    winner_team: winner
-  });
-  
-  broadcast({
-    type: 'game_end',
-    winner: winner
-  });
-  
-  console.log(`[GAME] ИГРА ЗАКОНЧЕНА | WINNER: ${winner}`);
-  
-  setTimeout(resetGame, 5000);
-}
-
-// ============================================================
-// RESET GAME
-// ============================================================
-
-function resetGame() {
-  resetState();
-  
-  players.forEach(p => {
-    const position = spawn(p.team, true);
-    
-    Object.assign(p, {
-      inGame: false,
-      hp: PLAYER_MAX_HP,
-      isDead: false,
-      x: position.x,
-      y: position.y,
-      flip: false,
-      lastDamageTime: Date.now()
-    });
-  });
-  
-  broadcast({
-    type: 'reset_lobby'
-  });
-  
-  broadcastPlayerList();
-  
-  console.log('[GAME] Лобби сброшено');
-}
-
-// ============================================================
-// DISCONNECT
-// ============================================================
-
-function disconnect(ws) {
-  const id = ws.playerData?.id;
-  if (!id) return;
-  if (!players.has(id)) return;
-  
-  players.delete(id);
-  
-  console.log(`[DISCONNECT] ${id} | players=${players.size}`);
-  
-  broadcast({
-    type: 'player_left',
-    id: id
-  });
-  
-  broadcastPlayerList();
-  
-  if (state.status === 'countdown' && (players.size < MIN_PLAYERS || readyCount() < MIN_PLAYERS)) {
-    cancelCountdown();
-  }
-  
-  if (state.status === 'playing') {
-    checkPlayers();
-  }
-}
-
-// ============================================================
-// PROCESS EXIT
-// ============================================================
-
-process.on('SIGINT', () => {
-  console.log('[SERVER] Остановка...');
-  
-  clearInterval(countdownTimer);
-  clearInterval(gameTimer);
-  clearInterval(playerCheckTimer);
-  clearInterval(creepTimer);
-  clearInterval(playerRegenTimer);
-  clearInterval(animationSyncTimer);
-  clearInterval(creepUpdateTimer);
-  clearInterval(creepSyncTimer);
-  
-  process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-  console.log('[SERVER] SIGTERM');
-  
-  clearInterval(countdownTimer);
-  clearInterval(gameTimer);
-  clearInterval(playerCheckTimer);
-  clearInterval(creepTimer);
-  clearInterval(playerRegenTimer);
-  clearInterval(animationSyncTimer);
-  clearInterval(creepUpdateTimer);
-  clearInterval(creepSyncTimer);
-  
-  process.exit(0);
-});
+    if (state.status ===
