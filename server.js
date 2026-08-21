@@ -36,6 +36,18 @@ const CREEP_BARRACKS_ATTACK_RANGE = 160;
 const CREEP_SEARCH_RANGE = 380;
 const CREEP_SYNC_INTERVAL = 100;
 
+// ============================================================
+// BOT SETTINGS
+// ============================================================
+const BOT_MAX_HP = 80;
+const BOT_SPEED = 100;
+const BOT_DAMAGE = 15;
+const BOT_ATTACK_RANGE = 70;
+const BOT_ATTACK_COOLDOWN = 1500;
+const BOT_LIFETIME = 30000;
+const BOT_SYNC_INTERVAL = 100;
+const MAX_BOTS_PER_PLAYER = 3;
+
 const GROUND_Y = 0;
 
 // ============================================================
@@ -50,6 +62,8 @@ let creepTimer = null;
 let playerRegenTimer = null;
 let animationSyncTimer = null;
 let creepSyncTimer = null;
+let botSyncTimer = null;
+let botLifeTimer = null;
 
 // ============================================================
 // STATE
@@ -67,6 +81,7 @@ function resetState() {
     blueBarracksDestroyed: false,
     redBarracksDestroyed: false,
     creeps: [],
+    bots: [],
     nextCreepTeam: 1,
     nextCreepId: 1,
     animationTick: 0,
@@ -122,6 +137,14 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(' DAMAGE:', CREEP_DAMAGE);
   console.log(' ATTACK RANGE:', CREEP_ATTACK_RANGE);
   console.log(' ATTACK COOLDOWN:', CREEP_ATTACK_COOLDOWN, 'ms');
+  console.log('');
+  console.log('BOT SETTINGS:');
+  console.log(' MAX HP:', BOT_MAX_HP);
+  console.log(' SPEED:', BOT_SPEED);
+  console.log(' DAMAGE:', BOT_DAMAGE);
+  console.log(' ATTACK RANGE:', BOT_ATTACK_RANGE);
+  console.log(' LIFETIME:', BOT_LIFETIME / 1000, 'seconds');
+  console.log(' MAX PER PLAYER:', MAX_BOTS_PER_PLAYER);
   console.log(' GROUND Y:', GROUND_Y);
   console.log('==========================================');
   console.log('');
@@ -131,7 +154,7 @@ server.listen(PORT, '0.0.0.0', () => {
 // KEEP ALIVE
 // ============================================================
 setInterval(() => {
-  console.log(`[SERVER] alive | players=${players.size} | status=${state.status} | creeps=${state.creeps.length}`);
+  console.log(`[SERVER] alive | players=${players.size} | status=${state.status} | creeps=${state.creeps.length} | bots=${state.bots.length}`);
 }, 30000);
 
 // ============================================================
@@ -270,6 +293,141 @@ function broadcastAllCreeps() {
     type: 'creeps_sync',
     creeps: getAllCreepsData()
   });
+}
+
+// ============================================================
+// BOT HELPERS
+// ============================================================
+function getBotData(bot) {
+  return {
+    id: bot.id,
+    owner_id: bot.owner_id,
+    team: bot.team,
+    hp: bot.hp,
+    maxHp: bot.maxHp,
+    x: bot.x,
+    y: bot.y,
+    flip: bot.flip || false,
+    isDead: bot.isDead || false
+  };
+}
+
+function getAllBotsData() {
+  return state.bots.filter(b => !b.isDead).map(bot => getBotData(bot));
+}
+
+function broadcastAllBots() {
+  broadcast({
+    type: 'bots_sync',
+    bots: getAllBotsData()
+  });
+}
+
+function spawnBot(ownerId, team, x, y) {
+  if (!ownerId) return null;
+  if (state.status !== 'playing') return null;
+
+  // Удаляем мёртвых ботов
+  state.bots = state.bots.filter(b => !b.isDead);
+
+  // Проверяем сколько ботов у этого игрока
+  const ownerBots = state.bots.filter(b => b.owner_id === ownerId && !b.isDead);
+  if (ownerBots.length >= MAX_BOTS_PER_PLAYER) {
+    return null;
+  }
+
+  const bot = {
+    id: `bot_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+    owner_id: ownerId,
+    team: team,
+    hp: BOT_MAX_HP,
+    maxHp: BOT_MAX_HP,
+    x: x || 0,
+    y: y || 0,
+    flip: false,
+    isDead: false,
+    spawnTime: Date.now(),
+    attackCooldown: 0,
+    target_id: null,
+    state: 'idle' // idle, chasing, attacking, returning
+  };
+
+  state.bots.push(bot);
+
+  broadcast({
+    type: 'bot_spawn',
+    bot: getBotData(bot)
+  });
+
+  broadcastAnimation(
+    'bot_spawn',
+    {
+      bot_id: bot.id,
+      position: { x: bot.x, y: bot.y },
+      team: bot.team,
+      owner_id: bot.owner_id
+    },
+    ownerId,
+    ''
+  );
+
+  console.log(`[BOT] ${bot.id} призван игроком ${ownerId} для команды ${team} на X=${bot.x}`);
+
+  return bot;
+}
+
+function damageBot(botId, damage, attackerTeam = 0) {
+  const bot = state.bots.find(b => b.id === botId);
+  if (!bot || bot.isDead) return false;
+
+  // Не наносим урон своим
+  if (attackerTeam !== 0 && attackerTeam === bot.team) {
+    return false;
+  }
+
+  bot.hp = Math.max(0, bot.hp - damage);
+
+  broadcast({
+    type: 'bot_damage',
+    bot_id: bot.id,
+    new_hp: bot.hp
+  });
+
+  if (bot.hp <= 0) {
+    bot.isDead = true;
+    broadcast({
+      type: 'bot_destroy',
+      bot_id: bot.id
+    });
+    broadcastAnimation('bot_destroy', { bot_id: bot.id }, '', '');
+    console.log(`[BOT] ${bot.id} уничтожен`);
+    
+    // Удаляем из списка через 5 секунд
+    setTimeout(() => {
+      state.bots = state.bots.filter(b => b.id !== botId);
+    }, 5000);
+    
+    return true;
+  }
+  
+  return false;
+}
+
+function updateBotPosition(botId, x, y, flip) {
+  const bot = state.bots.find(b => b.id === botId);
+  if (!bot || bot.isDead) return;
+
+  bot.x = x;
+  bot.y = y;
+  bot.flip = flip || false;
+}
+
+function getBotById(botId) {
+  return state.bots.find(b => b.id === botId);
+}
+
+function getBotsByOwner(ownerId) {
+  return state.bots.filter(b => b.owner_id === ownerId && !b.isDead);
 }
 
 // ============================================================
@@ -435,6 +593,34 @@ function route(ws, data) {
 
   if (type === 'respawn') {
     respawn(String(data.id || ''));
+    return;
+  }
+
+  // ============================================================
+  // BOT HANDLERS
+  // ============================================================
+  if (type === 'summon_bot') {
+    summonBot(ws, data);
+    return;
+  }
+
+  if (type === 'bot_damage') {
+    botDamage(ws, data);
+    return;
+  }
+
+  if (type === 'bot_position_update') {
+    botPositionUpdate(ws, data);
+    return;
+  }
+
+  if (type === 'bot_attack') {
+    botAttack(ws, data);
+    return;
+  }
+
+  if (type === 'bot_state_update') {
+    botStateUpdate(ws, data);
     return;
   }
 
@@ -727,6 +913,10 @@ function startGame() {
     p.lastDamageTime = now;
   });
 
+  // Очищаем ботов и крипов
+  state.bots = [];
+  state.creeps = [];
+
   const data = playersObject();
 
   wss.clients.forEach(ws => {
@@ -763,6 +953,8 @@ function startGame() {
   clearInterval(playerRegenTimer);
   clearInterval(animationSyncTimer);
   clearInterval(creepSyncTimer);
+  clearInterval(botSyncTimer);
+  clearInterval(botLifeTimer);
 
   gameTimer = null;
   playerCheckTimer = null;
@@ -770,6 +962,8 @@ function startGame() {
   playerRegenTimer = null;
   animationSyncTimer = null;
   creepSyncTimer = null;
+  botSyncTimer = null;
+  botLifeTimer = null;
 
   // Запускаем игровой таймер
   gameTimer = setInterval(() => {
@@ -810,6 +1004,26 @@ function startGame() {
     }
   }, CREEP_SYNC_INTERVAL);
 
+  // Синхронизация ботов
+  botSyncTimer = setInterval(() => {
+    if (state.status === 'playing') {
+      broadcastAllBots();
+    }
+  }, BOT_SYNC_INTERVAL);
+
+  // Проверка жизни ботов
+  botLifeTimer = setInterval(() => {
+    if (state.status !== 'playing') return;
+
+    const now = Date.now();
+    state.bots.forEach(bot => {
+      if (bot.isDead) return;
+      if (now - bot.spawnTime > BOT_LIFETIME) {
+        damageBot(bot.id, 99999);
+      }
+    });
+  }, 5000);
+
   // Синхронизация анимаций
   animationSyncTimer = setInterval(() => {
     if (state.status !== 'playing') return;
@@ -824,6 +1038,7 @@ function startGame() {
 
   console.log('[GAME] ИГРА НАЧАЛАСЬ');
   console.log(`[GAME] Крипы будут спавниться каждые ${CREEP_SPAWN_INTERVAL}мс`);
+  console.log(`[GAME] Боты синхронизируются каждые ${BOT_SYNC_INTERVAL}мс`);
 }
 
 // ============================================================
@@ -1033,7 +1248,6 @@ function creepPositionUpdate(_, data) {
   if (data.y !== undefined) creep.y = Number(data.y);
   if (data.direction !== undefined) creep.direction = Number(data.direction);
 
-  // Отправляем обновление всем остальным клиентам
   broadcast({
     type: 'creep_position_update',
     id: creep.id,
@@ -1041,6 +1255,171 @@ function creepPositionUpdate(_, data) {
     y: creep.y,
     direction: creep.direction
   });
+}
+
+// ============================================================
+// BOT FUNCTIONS
+// ============================================================
+function summonBot(ws, data) {
+  const ownerId = String(data.player_id || ws.playerData?.id || '');
+  const p = players.get(ownerId);
+  if (!p) {
+    send(ws, { type: 'error', message: 'Игрок не найден' });
+    return;
+  }
+
+  if (state.status !== 'playing') {
+    send(ws, { type: 'error', message: 'Игра не началась' });
+    return;
+  }
+
+  if (p.isDead) {
+    send(ws, { type: 'error', message: 'Вы мертвы' });
+    return;
+  }
+
+  const x = Number(data.position?.[0] || p.x || 0);
+  const y = Number(data.position?.[1] || p.y || 0);
+  const team = p.team;
+
+  const bot = spawnBot(ownerId, team, x, y);
+  if (!bot) {
+    send(ws, { 
+      type: 'error', 
+      message: `Нельзя призвать больше ${MAX_BOTS_PER_PLAYER} ботов` 
+    });
+    return;
+  }
+
+  // Отправляем подтверждение владельцу
+  send(ws, {
+    type: 'summon_bot_success',
+    bot_id: bot.id,
+    x: bot.x,
+    y: bot.y
+  });
+}
+
+function botDamage(ws, data) {
+  if (state.status !== 'playing') return;
+
+  const botId = String(data.bot_id || '');
+  const damage = Math.max(0, Number(data.damage) || 10);
+  const attackerTeam = Number(data.team || 0);
+
+  damageBot(botId, damage, attackerTeam);
+}
+
+function botPositionUpdate(ws, data) {
+  if (state.status !== 'playing') return;
+
+  const botId = String(data.bot_id || '');
+  const bot = getBotById(botId);
+  if (!bot) return;
+
+  // Проверяем, что обновление от владельца бота
+  const ownerId = ws.playerData?.id;
+  if (ownerId !== bot.owner_id) return;
+
+  const x = Number(data.x);
+  const y = Number(data.y);
+  const flip = !!data.flip;
+
+  if (Number.isFinite(x)) bot.x = x;
+  if (Number.isFinite(y)) bot.y = y;
+  bot.flip = flip;
+
+  // Отправляем обновление всем
+  broadcast({
+    type: 'bot_position_update',
+    bot_id: bot.id,
+    x: bot.x,
+    y: bot.y,
+    flip: bot.flip
+  }, ws);
+}
+
+function botAttack(ws, data) {
+  if (state.status !== 'playing') return;
+
+  const botId = String(data.bot_id || '');
+  const bot = getBotById(botId);
+  if (!bot || bot.isDead) return;
+
+  // Проверяем владельца
+  const ownerId = ws.playerData?.id;
+  if (ownerId !== bot.owner_id) return;
+
+  const targetId = String(data.target_id || '');
+  const damage = Number(data.damage) || BOT_DAMAGE;
+
+  // Проверяем кулдаун
+  const now = Date.now();
+  if (now - bot.attackCooldown < BOT_ATTACK_COOLDOWN) return;
+  bot.attackCooldown = now;
+
+  // Ищем цель (игрок или крип)
+  let targetFound = false;
+  
+  // Проверяем игроков
+  players.forEach(p => {
+    if (p.id === bot.owner_id) return;
+    if (p.team === bot.team) return;
+    if (p.isDead) return;
+    if (p.id === targetId) {
+      targetFound = true;
+      const dist = Math.sqrt(Math.pow(p.x - bot.x, 2) + Math.pow(p.y - bot.y, 2));
+      if (dist <= BOT_ATTACK_RANGE + 50) {
+        playerDamage(ws, { target_id: p.id, damage: damage });
+        broadcastAnimation('bot_attack', { 
+          bot_id: bot.id, 
+          target_id: p.id,
+          damage: damage 
+        }, bot.owner_id, '');
+      }
+    }
+  });
+
+  // Проверяем крипов
+  if (!targetFound) {
+    state.creeps.forEach(creep => {
+      if (creep.team === bot.team) return;
+      if (creep.isDead) return;
+      if (creep.id === targetId) {
+        targetFound = true;
+        const dist = Math.sqrt(Math.pow(creep.x - bot.x, 2) + Math.pow(creep.y - bot.y, 2));
+        if (dist <= BOT_ATTACK_RANGE + 50) {
+          creepDamage(ws, { id: creep.id, damage: damage });
+          broadcastAnimation('bot_attack', { 
+            bot_id: bot.id, 
+            target_id: creep.id,
+            damage: damage 
+          }, bot.owner_id, '');
+        }
+      }
+    });
+  }
+}
+
+function botStateUpdate(ws, data) {
+  if (state.status !== 'playing') return;
+
+  const botId = String(data.bot_id || '');
+  const bot = getBotById(botId);
+  if (!bot || bot.isDead) return;
+
+  // Проверяем владельца
+  const ownerId = ws.playerData?.id;
+  if (ownerId !== bot.owner_id) return;
+
+  const newState = String(data.state || 'idle');
+  bot.state = newState;
+
+  broadcast({
+    type: 'bot_state_update',
+    bot_id: bot.id,
+    state: bot.state
+  }, ws);
 }
 
 // ============================================================
@@ -1071,6 +1450,8 @@ function endGame(winner) {
   clearInterval(playerRegenTimer);
   clearInterval(animationSyncTimer);
   clearInterval(creepSyncTimer);
+  clearInterval(botSyncTimer);
+  clearInterval(botLifeTimer);
 
   gameTimer = null;
   playerCheckTimer = null;
@@ -1078,6 +1459,8 @@ function endGame(winner) {
   playerRegenTimer = null;
   animationSyncTimer = null;
   creepSyncTimer = null;
+  botSyncTimer = null;
+  botLifeTimer = null;
 
   broadcast({
     type: 'countdown_update',
@@ -1144,6 +1527,9 @@ function disconnect(ws) {
   if (!id) return;
   if (!players.has(id)) return;
 
+  // Удаляем ботов игрока
+  state.bots = state.bots.filter(b => b.owner_id !== id);
+
   players.delete(id);
 
   console.log(`[DISCONNECT] ${id} | players=${players.size}`);
@@ -1154,6 +1540,9 @@ function disconnect(ws) {
   });
 
   broadcastPlayerList();
+
+  // Уведомляем об удалении ботов
+  broadcastAllBots();
 
   if (state.status === 'countdown' && (players.size < MIN_PLAYERS || readyCount() < MIN_PLAYERS)) {
     cancelCountdown();
@@ -1177,6 +1566,8 @@ process.on('SIGINT', () => {
   clearInterval(playerRegenTimer);
   clearInterval(animationSyncTimer);
   clearInterval(creepSyncTimer);
+  clearInterval(botSyncTimer);
+  clearInterval(botLifeTimer);
 
   process.exit(0);
 });
@@ -1191,6 +1582,8 @@ process.on('SIGTERM', () => {
   clearInterval(playerRegenTimer);
   clearInterval(animationSyncTimer);
   clearInterval(creepSyncTimer);
+  clearInterval(botSyncTimer);
+  clearInterval(botLifeTimer);
 
   process.exit(0);
 });
