@@ -66,6 +66,155 @@ let botSyncTimer = null;
 let botLifeTimer = null;
 
 // ============================================================
+// BOT SYNCHRONIZATION (НОВЫЕ ФУНКЦИИ)
+// ============================================================
+
+// 1. ОБНОВЛЕНИЕ ПОЗИЦИИ БОТА
+function botPosition(ws, data) {
+    const ownerId = ws.playerData?.id;
+    if (!ownerId) return;
+
+    const botId = String(data.bot_id || '');
+    const x = Number(data.x);
+    const y = Number(data.y);
+    const flip = !!data.flip;
+
+    // Ищем бота в state.bots
+    const bot = state.bots.find(b => b.id === botId);
+    if (!bot) return;
+
+    // Проверяем, что владелец бота - этот игрок
+    if (bot.owner_id !== ownerId) return;
+
+    // Обновляем позицию
+    bot.x = x;
+    bot.y = y;
+    bot.flip = flip;
+
+    // Рассылаем ВСЕМ игрокам
+    broadcast({
+        type: 'bot_position_update',  // Отправляем всем
+        bot_id: bot.id,
+        x: bot.x,
+        y: bot.y,
+        flip: bot.flip
+    }, ws);  // Исключаем отправителя (опционально)
+}
+
+// 2. СОЗДАНИЕ БОТА
+function botSpawn(ws, data) {
+    const ownerId = ws.playerData?.id;
+    if (!ownerId) return;
+
+    const p = players.get(ownerId);
+    if (!p) return;
+
+    // Проверяем игру
+    if (state.status !== 'playing') {
+        send(ws, { type: 'error', message: 'Игра не началась' });
+        return;
+    }
+
+    // Получаем данные бота
+    const botId = String(data.bot_id || `bot_${Date.now()}`);
+    const x = Number(data.x || p.x);
+    const y = Number(data.y || p.y);
+    const team = Number(data.team || p.team);
+
+    // Создаём бота в state
+    const bot = {
+        id: botId,
+        owner_id: ownerId,
+        team: team,
+        hp: Number(data.hp) || BOT_MAX_HP,
+        maxHp: BOT_MAX_HP,
+        x: x,
+        y: y,
+        flip: false,
+        isDead: false,
+        spawnTime: Date.now()
+    };
+
+    state.bots.push(bot);
+
+    // Рассылаем ВСЕМ о создании бота
+    broadcast({
+        type: 'bot_spawn_sync',
+        bot: {
+            id: bot.id,
+            owner_id: bot.owner_id,
+            team: bot.team,
+            hp: bot.hp,
+            maxHp: bot.maxHp,
+            x: bot.x,
+            y: bot.y,
+            flip: bot.flip
+        }
+    });
+
+    console.log(`[BOT] Создан бот ${bot.id} игроком ${ownerId}`);
+}
+
+// 3. УРОН ПО БОТУ
+function botDamage(ws, data) {
+    const botId = String(data.bot_id || '');
+    const damage = Number(data.damage) || 10;
+    const attackerId = String(data.attacker_id || '');
+
+    const bot = state.bots.find(b => b.id === botId);
+    if (!bot || bot.isDead) return;
+
+    // Наносим урон
+    bot.hp = Math.max(0, bot.hp - damage);
+
+    // Рассылаем ВСЕМ об уроне
+    broadcast({
+        type: 'bot_damage_sync',
+        bot_id: bot.id,
+        new_hp: bot.hp,
+        attacker_id: attackerId
+    });
+
+    // Если бот умер
+    if (bot.hp <= 0) {
+        bot.isDead = true;
+        
+        broadcast({
+            type: 'bot_destroy_sync',
+            bot_id: bot.id
+        });
+
+        // Удаляем через 5 секунд
+        setTimeout(() => {
+            state.bots = state.bots.filter(b => b.id !== botId);
+        }, 5000);
+    }
+}
+
+// 4. УНИЧТОЖЕНИЕ БОТА
+function botDestroy(ws, data) {
+    const botId = String(data.bot_id || '');
+    const ownerId = ws.playerData?.id;
+
+    const bot = state.bots.find(b => b.id === botId);
+    if (!bot) return;
+
+    // Проверяем, что владелец бота - этот игрок
+    if (bot.owner_id !== ownerId) return;
+
+    bot.isDead = true;
+
+    broadcast({
+        type: 'bot_destroy_sync',
+        bot_id: bot.id
+    });
+
+    // Удаляем через 5 секунд
+    setTimeout(() => {
+        state.bots = state.bots.filter(b => b.id !== botId);
+    }, 5000);
+}
+// ============================================================
 // STATE
 // ============================================================
 function resetState() {
