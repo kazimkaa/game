@@ -66,67 +66,142 @@ let botSyncTimer = null;
 let botLifeTimer = null;
 
 // ============================================================
-// BOT SYNCHRONIZATION (НОВЫЕ ФУНКЦИИ)
+// BOT SYNCHRONIZATION (НОВЫЕ ФУНКЦИИ) С ОТЛАДКОЙ
 // ============================================================
 
 // 1. ОБНОВЛЕНИЕ ПОЗИЦИИ БОТА
 function botPosition(ws, data) {
+    console.log('[BOT-POS] 📍 Начало обработки позиции бота');
+    
     const ownerId = ws.playerData?.id;
-    if (!ownerId) return;
+    if (!ownerId) {
+        console.log('[BOT-POS] ❌ Ошибка: нет ownerId');
+        return;
+    }
 
     const botId = String(data.bot_id || '');
     const x = Number(data.x);
     const y = Number(data.y);
     const flip = !!data.flip;
 
+    console.log(`[BOT-POS] 📊 Данные: botId=${botId}, x=${x}, y=${y}, flip=${flip}, owner=${ownerId}`);
+
+    if (!botId) {
+        console.log('[BOT-POS] ❌ Ошибка: пустой botId');
+        return;
+    }
+
     // Ищем бота в state.bots
     const bot = state.bots.find(b => b.id === botId);
-    if (!bot) return;
+    if (!bot) {
+        console.log(`[BOT-POS] ❌ Бот не найден в state: ${botId}`);
+        console.log(`[BOT-POS] 📋 Все боты в state: ${JSON.stringify(state.bots.map(b => b.id))}`);
+        return;
+    }
 
     // Проверяем, что владелец бота - этот игрок
-    if (bot.owner_id !== ownerId) return;
+    if (bot.owner_id !== ownerId) {
+        console.log(`[BOT-POS] ❌ Владелец не совпадает: bot.owner=${bot.owner_id}, owner=${ownerId}`);
+        return;
+    }
 
     // Обновляем позицию
+    const oldX = bot.x;
+    const oldY = bot.y;
     bot.x = x;
     bot.y = y;
     bot.flip = flip;
 
+    console.log(`[BOT-POS] ✅ Позиция обновлена: ${botId} (${oldX},${oldY}) -> (${x},${y})`);
+
     // Рассылаем ВСЕМ игрокам
-    broadcast({
-        type: 'bot_position_update',  // Отправляем всем
+    const broadcastData = {
+        type: 'bot_position_update',
         bot_id: bot.id,
         x: bot.x,
         y: bot.y,
         flip: bot.flip
-    }, ws);  // Исключаем отправителя (опционально)
+    };
+    
+    console.log(`[BOT-POS] 📤 Рассылка позиции всем: ${JSON.stringify(broadcastData)}`);
+    broadcast(broadcastData, ws);
 }
 
 // 2. СОЗДАНИЕ БОТА
 function botSpawn(ws, data) {
+    console.log('[BOT-SPAWN] 🚀 Начало создания бота');
+    
     const ownerId = ws.playerData?.id;
-    if (!ownerId) return;
+    if (!ownerId) {
+        console.log('[BOT-SPAWN] ❌ Ошибка: нет ownerId');
+        return;
+    }
 
     const p = players.get(ownerId);
-    if (!p) return;
+    if (!p) {
+        console.log(`[BOT-SPAWN] ❌ Игрок не найден: ${ownerId}`);
+        return;
+    }
+
+    console.log(`[BOT-SPAWN] 👤 Игрок: ${ownerId}, ник: ${p.nickname}, команда: ${p.team}`);
 
     // Проверяем игру
     if (state.status !== 'playing') {
+        console.log(`[BOT-SPAWN] ❌ Игра не началась: status=${state.status}`);
         send(ws, { type: 'error', message: 'Игра не началась' });
         return;
     }
 
     // Получаем данные бота
-    const botId = String(data.bot_id || `bot_${Date.now()}`);
+    const botId = String(data.bot_id || `bot_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`);
     const x = Number(data.x || p.x);
     const y = Number(data.y || p.y);
     const team = Number(data.team || p.team);
+    const hp = Number(data.hp) || BOT_MAX_HP;
+
+    console.log(`[BOT-SPAWN] 📊 Данные бота: id=${botId}, x=${x}, y=${y}, team=${team}, hp=${hp}`);
+
+    // Проверяем лимит ботов
+    const playerBots = state.bots.filter(b => b.owner_id === ownerId && !b.isDead);
+    if (playerBots.length >= 5) {
+        console.log(`[BOT-SPAWN] ❌ Лимит ботов для игрока ${ownerId}: ${playerBots.length}/5`);
+        send(ws, { type: 'error', message: 'Достигнут лимит ботов (5)' });
+        return;
+    }
+
+    // Проверяем, не существует ли уже такой бот
+    const existingBot = state.bots.find(b => b.id === botId);
+    if (existingBot) {
+        console.log(`[BOT-SPAWN] ⚠️ Бот уже существует: ${botId}, обновляем данные`);
+        existingBot.x = x;
+        existingBot.y = y;
+        existingBot.team = team;
+        existingBot.hp = hp;
+        existingBot.isDead = false;
+        
+        // Рассылаем обновление
+        broadcast({
+            type: 'bot_spawn_sync',
+            bot: {
+                id: existingBot.id,
+                owner_id: existingBot.owner_id,
+                team: existingBot.team,
+                hp: existingBot.hp,
+                maxHp: existingBot.maxHp,
+                x: existingBot.x,
+                y: existingBot.y,
+                flip: existingBot.flip
+            }
+        });
+        return;
+    }
 
     // Создаём бота в state
     const bot = {
         id: botId,
         owner_id: ownerId,
         team: team,
-        hp: Number(data.hp) || BOT_MAX_HP,
+        hp: hp,
         maxHp: BOT_MAX_HP,
         x: x,
         y: y,
@@ -136,9 +211,11 @@ function botSpawn(ws, data) {
     };
 
     state.bots.push(bot);
+    console.log(`[BOT-SPAWN] ✅ Бот добавлен в state: ${botId}`);
+    console.log(`[BOT-SPAWN] 📋 Всего ботов: ${state.bots.length}`);
 
     // Рассылаем ВСЕМ о создании бота
-    broadcast({
+    const spawnData = {
         type: 'bot_spawn_sync',
         bot: {
             id: bot.id,
@@ -150,70 +227,257 @@ function botSpawn(ws, data) {
             y: bot.y,
             flip: bot.flip
         }
-    });
+    };
+    
+    console.log(`[BOT-SPAWN] 📤 Рассылка создания бота всем: ${JSON.stringify(spawnData)}`);
+    broadcast(spawnData);
 
-    console.log(`[BOT] Создан бот ${bot.id} игроком ${ownerId}`);
+    console.log(`[BOT-SPAWN] ✅ Бот ${bot.id} успешно создан игроком ${ownerId}`);
 }
 
 // 3. УРОН ПО БОТУ
 function botDamage(ws, data) {
+    console.log('[BOT-DAMAGE] 💥 Начало обработки урона по боту');
+    
     const botId = String(data.bot_id || '');
     const damage = Number(data.damage) || 10;
     const attackerId = String(data.attacker_id || '');
 
-    const bot = state.bots.find(b => b.id === botId);
-    if (!bot || bot.isDead) return;
+    console.log(`[BOT-DAMAGE] 📊 Данные: botId=${botId}, damage=${damage}, attacker=${attackerId}`);
 
+    if (!botId) {
+        console.log('[BOT-DAMAGE] ❌ Ошибка: пустой botId');
+        return;
+    }
+
+    const bot = state.bots.find(b => b.id === botId);
+    if (!bot) {
+        console.log(`[BOT-DAMAGE] ❌ Бот не найден: ${botId}`);
+        return;
+    }
+
+    if (bot.isDead) {
+        console.log(`[BOT-DAMAGE] ⚠️ Бот уже мёртв: ${botId}`);
+        return;
+    }
+
+    const oldHp = bot.hp;
     // Наносим урон
     bot.hp = Math.max(0, bot.hp - damage);
 
+    console.log(`[BOT-DAMAGE] 💔 HP изменено: ${oldHp} -> ${bot.hp} (урон: ${damage})`);
+
     // Рассылаем ВСЕМ об уроне
-    broadcast({
+    const damageData = {
         type: 'bot_damage_sync',
         bot_id: bot.id,
         new_hp: bot.hp,
         attacker_id: attackerId
-    });
+    };
+    
+    console.log(`[BOT-DAMAGE] 📤 Рассылка урона всем: ${JSON.stringify(damageData)}`);
+    broadcast(damageData);
 
     // Если бот умер
     if (bot.hp <= 0) {
         bot.isDead = true;
+        console.log(`[BOT-DAMAGE] 💀 Бот умер: ${botId}`);
         
-        broadcast({
+        const destroyData = {
             type: 'bot_destroy_sync',
             bot_id: bot.id
-        });
+        };
+        
+        console.log(`[BOT-DAMAGE] 📤 Рассылка смерти бота всем: ${JSON.stringify(destroyData)}`);
+        broadcast(destroyData);
 
         // Удаляем через 5 секунд
+        console.log(`[BOT-DAMAGE] ⏳ Бот ${botId} будет удалён через 5 секунд`);
         setTimeout(() => {
-            state.bots = state.bots.filter(b => b.id !== botId);
+            const index = state.bots.findIndex(b => b.id === botId);
+            if (index !== -1) {
+                state.bots.splice(index, 1);
+                console.log(`[BOT-DAMAGE] 🗑️ Бот ${botId} удалён из state`);
+            }
         }, 5000);
     }
 }
 
 // 4. УНИЧТОЖЕНИЕ БОТА
 function botDestroy(ws, data) {
+    console.log('[BOT-DESTROY] 🗑️ Начало уничтожения бота');
+    
     const botId = String(data.bot_id || '');
     const ownerId = ws.playerData?.id;
 
+    console.log(`[BOT-DESTROY] 📊 Данные: botId=${botId}, owner=${ownerId}`);
+
+    if (!botId) {
+        console.log('[BOT-DESTROY] ❌ Ошибка: пустой botId');
+        return;
+    }
+
     const bot = state.bots.find(b => b.id === botId);
-    if (!bot) return;
+    if (!bot) {
+        console.log(`[BOT-DESTROY] ❌ Бот не найден: ${botId}`);
+        return;
+    }
 
     // Проверяем, что владелец бота - этот игрок
-    if (bot.owner_id !== ownerId) return;
+    if (bot.owner_id !== ownerId) {
+        console.log(`[BOT-DESTROY] ❌ Владелец не совпадает: bot.owner=${bot.owner_id}, owner=${ownerId}`);
+        return;
+    }
 
     bot.isDead = true;
+    console.log(`[BOT-DESTROY] 💀 Бот помечен как мёртвый: ${botId}`);
 
-    broadcast({
+    const destroyData = {
         type: 'bot_destroy_sync',
         bot_id: bot.id
-    });
+    };
+    
+    console.log(`[BOT-DESTROY] 📤 Рассылка уничтожения бота всем: ${JSON.stringify(destroyData)}`);
+    broadcast(destroyData);
 
     // Удаляем через 5 секунд
+    console.log(`[BOT-DESTROY] ⏳ Бот ${botId} будет удалён через 5 секунд`);
     setTimeout(() => {
-        state.bots = state.bots.filter(b => b.id !== botId);
+        const index = state.bots.findIndex(b => b.id === botId);
+        if (index !== -1) {
+            state.bots.splice(index, 1);
+            console.log(`[BOT-DESTROY] 🗑️ Бот ${botId} удалён из state`);
+        }
     }, 5000);
 }
+
+// 5. ПОЛУЧЕНИЕ ВСЕХ БОТОВ ДЛЯ НОВОГО ИГРОКА
+function getBotsSync(ws) {
+    console.log('[BOT-SYNC] 🔄 Запрос синхронизации ботов');
+    
+    if (!state.bots || state.bots.length === 0) {
+        console.log('[BOT-SYNC] 📭 Нет ботов для синхронизации');
+        send(ws, {
+            type: 'bots_sync',
+            bots: []
+        });
+        return;
+    }
+
+    const botsData = state.bots
+        .filter(b => !b.isDead)
+        .map(b => ({
+            id: b.id,
+            owner_id: b.owner_id,
+            team: b.team,
+            hp: b.hp,
+            maxHp: b.maxHp,
+            x: b.x,
+            y: b.y,
+            flip: b.flip || false
+        }));
+
+    console.log(`[BOT-SYNC] 📊 Отправка ${botsData.length} ботов игроку`);
+    console.log(`[BOT-SYNC] 📋 Боты: ${JSON.stringify(botsData.map(b => b.id))}`);
+
+    send(ws, {
+        type: 'bots_sync',
+        bots: botsData
+    });
+}
+
+// 6. ПЕРИОДИЧЕСКАЯ СИНХРОНИЗАЦИЯ БОТОВ
+function syncBotsToAll() {
+    if (!state.bots || state.bots.length === 0) {
+        return;
+    }
+
+    const aliveBots = state.bots.filter(b => !b.isDead);
+    if (aliveBots.length === 0) {
+        return;
+    }
+
+    const botsData = aliveBots.map(b => ({
+        id: b.id,
+        owner_id: b.owner_id,
+        team: b.team,
+        hp: b.hp,
+        maxHp: b.maxHp,
+        x: b.x,
+        y: b.y,
+        flip: b.flip || false
+    }));
+
+    console.log(`[BOT-SYNC] 🔄 Периодическая синхронизация ${botsData.length} ботов`);
+    
+    broadcast({
+        type: 'bots_sync',
+        bots: botsData
+    });
+}
+
+// 7. ОЧИСТКА МЁРТВЫХ БОТОВ
+function cleanupDeadBots() {
+    const before = state.bots.length;
+    state.bots = state.bots.filter(b => !b.isDead);
+    const after = state.bots.length;
+    
+    if (before !== after) {
+        console.log(`[BOT-CLEANUP] 🧹 Удалено ${before - after} мёртвых ботов`);
+    }
+}
+
+// 8. ЛОГИРОВАНИЕ СОСТОЯНИЯ БОТОВ
+function logBotsState() {
+    console.log('========================================');
+    console.log('[BOT-STATE] 📊 СТАТУС БОТОВ');
+    console.log(`[BOT-STATE] Всего ботов: ${state.bots.length}`);
+    
+    const aliveBots = state.bots.filter(b => !b.isDead);
+    console.log(`[BOT-STATE] Живых ботов: ${aliveBots.length}`);
+    
+    const deadBots = state.bots.filter(b => b.isDead);
+    console.log(`[BOT-STATE] Мёртвых ботов: ${deadBots.length}`);
+    
+    if (aliveBots.length > 0) {
+        console.log('[BOT-STATE] Живые боты:');
+        aliveBots.forEach((b, i) => {
+            console.log(`  ${i+1}. ID: ${b.id}, Владелец: ${b.owner_id}, Команда: ${b.team}, HP: ${b.hp}/${b.maxHp}, Позиция: (${b.x}, ${b.y})`);
+        });
+    }
+    
+    if (deadBots.length > 0) {
+        console.log('[BOT-STATE] Мёртвые боты (ожидают удаления):');
+        deadBots.forEach((b, i) => {
+            console.log(`  ${i+1}. ID: ${b.id}, Владелец: ${b.owner_id}`);
+        });
+    }
+    console.log('========================================');
+}
+
+// 9. ВЫЗОВ ОТЛАДКИ ПРИ СОЗДАНИИ/УДАЛЕНИИ
+// Добавить в botSpawn перед broadcast:
+// logBotsState();
+
+// Добавить в botDestroy перед broadcast:
+// logBotsState();
+
+// 10. ПЕРИОДИЧЕСКАЯ ОЧИСТКА (запускать каждые 30 секунд)
+setInterval(() => {
+    cleanupDeadBots();
+    syncBotsToAll();
+}, 30000);
+
+// 11. ЛОГИРОВАНИЕ КАЖДЫЕ 10 СЕКУНД (для отладки)
+setInterval(() => {
+    logBotsState();
+}, 10000);
+
+console.log('[BOT-INIT] ✅ Система ботов инициализирована с отладкой');
+console.log('[BOT-INIT] 📋 Функции: botSpawn, botPosition, botDamage, botDestroy');
+console.log('[BOT-INIT] 📋 Синхронизация: getBotsSync, syncBotsToAll');
+console.log('[BOT-INIT] 📋 Очистка: cleanupDeadBots');
+console.log('[BOT-INIT] 📋 Логирование: logBotsState');
 // ============================================================
 // STATE
 // ============================================================
