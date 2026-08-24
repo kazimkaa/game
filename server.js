@@ -100,9 +100,7 @@ function botPosition(ws, data) {
         return;
     }
 
-    console.log(`[BOT-POS] 📊 Всего ботов в state: ${state.bots.length}`);
-    console.log(`[BOT-POS] 📋 ID ботов: ${JSON.stringify(state.bots.map(b => b.id))}`);
-
+    // 🔥 НАЙТИ БОТА
     const bot = state.bots.find(b => b.id === botId);
     if (!bot) {
         console.log(`[BOT-POS] ❌ Бот не найден: ${botId}`);
@@ -111,32 +109,34 @@ function botPosition(ws, data) {
 
     console.log(`[BOT-POS] 🎯 Бот найден: ${botId}, владелец: ${bot.owner_id}`);
 
+    // Проверка владельца
     if (bot.owner_id !== ownerId) {
         console.log(`[BOT-POS] ❌ Владелец не совпадает: бот.owner=${bot.owner_id}, запрос.owner=${ownerId}`);
         return;
     }
 
     // ============================================================
-    // 🔥 НОВАЯ ПРОВЕРКА: Защита от телепортации к игроку
+    // 🔥 ГЛАВНАЯ ПРОВЕРКА: Бот НЕ ДОЛЖЕН ТЕЛЕПОРТИРОВАТЬСЯ К ИГРОКУ
     // ============================================================
     
-    // Получаем позицию игрока-владельца
+    // 1. Находим игрока-владельца
     const owner = state.players.find(p => p.id === ownerId);
+    
     if (owner) {
-        // Максимальное расстояние, на которое бот может переместиться за один шаг
-        const MAX_MOVE_DISTANCE = 300; // пикселей
+        // 2. Расстояние между ботом и игроком
+        const distToOwner = Math.sqrt(
+            Math.pow(x - owner.x, 2) + 
+            Math.pow(y - owner.y, 2)
+        );
         
-        // Расстояние от старой позиции бота до новой
-        const dx = x - bot.x;
-        const dy = y - bot.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
+        console.log(`[BOT-POS] 📏 Расстояние до владельца: ${distToOwner.toFixed(2)}px`);
         
-        console.log(`[BOT-POS] 📏 Расстояние перемещения: ${distance.toFixed(2)}px`);
+        // 3. МИНИМАЛЬНОЕ расстояние между ботом и игроком (30px)
+        const MIN_DIST_TO_OWNER = 30;
         
-        // Если бот пытается переместиться слишком далеко - возможно, это позиция игрока
-        if (distance > MAX_MOVE_DISTANCE) {
-            console.log(`[BOT-POS] ⚠️ ПРЕДУПРЕЖДЕНИЕ: Слишком большое перемещение! ${distance.toFixed(2)}px > ${MAX_MOVE_DISTANCE}px`);
-            console.log(`[BOT-POS] 🛑 Игнорируем обновление позиции (защита от телепортации)`);
+        if (distToOwner < MIN_DIST_TO_OWNER) {
+            console.log(`[BOT-POS] ⚠️ Бот слишком близко к игроку! ${distToOwner.toFixed(2)}px < ${MIN_DIST_TO_OWNER}px`);
+            console.log(`[BOT-POS] 🛑 ИГНОРИРУЕМ обновление позиции (бот прилип к игроку)`);
             
             // Отправляем владельцу корректную позицию бота
             const correctionData = {
@@ -145,26 +145,27 @@ function botPosition(ws, data) {
                 x: bot.x,
                 y: bot.y,
                 flip: bot.flip || false,
-                _correction: true // флаг, что это исправление
+                _correction: true
             };
             
             // Отправляем только владельцу
-            sendToClient(ws, correctionData);
+            if (ws && ws.readyState === 1) {
+                ws.send(JSON.stringify(correctionData));
+                console.log(`[BOT-POS] 📤 Отправлена корректирующая позиция бота: (${bot.x.toFixed(2)}, ${bot.y.toFixed(2)})`);
+            }
             return;
         }
         
-        // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Бот не должен быть ближе к игроку, чем 30px
-        const distToOwner = Math.sqrt(
-            Math.pow(x - owner.x, 2) + 
-            Math.pow(y - owner.y, 2)
-        );
+        // 4. Проверка на СЛИШКОМ БОЛЬШОЕ перемещение (телепортация)
+        const dx = x - bot.x;
+        const dy = y - bot.y;
+        const moveDistance = Math.sqrt(dx * dx + dy * dy);
+        const MAX_MOVE_DISTANCE = 500; // пикселей за один шаг
         
-        const MIN_DIST_TO_OWNER = 30;
-        if (distToOwner < MIN_DIST_TO_OWNER) {
-            console.log(`[BOT-POS] ⚠️ Бот слишком близко к игроку: ${distToOwner.toFixed(2)}px < ${MIN_DIST_TO_OWNER}px`);
-            console.log(`[BOT-POS] 🛑 Игнорируем обновление позиции`);
+        if (moveDistance > MAX_MOVE_DISTANCE) {
+            console.log(`[BOT-POS] ⚠️ Слишком большое перемещение! ${moveDistance.toFixed(2)}px > ${MAX_MOVE_DISTANCE}px`);
+            console.log(`[BOT-POS] 🛑 ИГНОРИРУЕМ обновление позиции (попытка телепортации)`);
             
-            // Отправляем корректную позицию
             const correctionData = {
                 type: 'bot_position_update',
                 bot_id: bot.id,
@@ -173,13 +174,16 @@ function botPosition(ws, data) {
                 flip: bot.flip || false,
                 _correction: true
             };
-            sendToClient(ws, correctionData);
+            
+            if (ws && ws.readyState === 1) {
+                ws.send(JSON.stringify(correctionData));
+            }
             return;
         }
     }
 
     // ============================================================
-    // Если все проверки пройдены - обновляем позицию
+    // ✅ ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ - ОБНОВЛЯЕМ ПОЗИЦИЮ
     // ============================================================
     
     const oldX = bot.x;
@@ -190,7 +194,7 @@ function botPosition(ws, data) {
 
     console.log(`[BOT-POS] ✅ Позиция обновлена: (${oldX.toFixed(2)},${oldY.toFixed(2)}) -> (${x.toFixed(2)},${y.toFixed(2)})`);
 
-    // Рассылаем обновление ВСЕМ клиентам
+    // Рассылаем ВСЕМ клиентам
     const broadcastData = {
         type: 'bot_position_update',
         bot_id: bot.id,
@@ -201,21 +205,6 @@ function botPosition(ws, data) {
     
     console.log(`[BOT-POS] 📤 Рассылка: ${JSON.stringify(broadcastData)}`);
     broadcast(broadcastData, ws);
-}
-
-// ============================================================
-// ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Отправка сообщения конкретному клиенту
-// ============================================================
-
-function sendToClient(ws, data) {
-    if (ws && ws.readyState === 1) { // WebSocket.OPEN
-        try {
-            ws.send(JSON.stringify(data));
-            console.log(`[BOT-POS] 📤 Отправлено клиенту: ${JSON.stringify(data)}`);
-        } catch (error) {
-            console.error(`[BOT-POS] ❌ Ошибка отправки: ${error}`);
-        }
-    }
 }
 
 // 2. СОЗДАНИЕ БОТА
