@@ -131,14 +131,15 @@ function botPosition(ws, data) {
         
         console.log(`[BOT-POS] 📏 Расстояние до владельца: ${distToOwner.toFixed(2)}px`);
         
-        // 3. МИНИМАЛЬНОЕ расстояние между ботом и игроком (30px)
-        const MIN_DIST_TO_OWNER = 30;
+        // 🔥 3. МИНИМАЛЬНОЕ расстояние между ботом и игроком (50px)
+        const MIN_DIST_TO_OWNER = 50;
         
         if (distToOwner < MIN_DIST_TO_OWNER) {
             console.log(`[BOT-POS] ⚠️ Бот слишком близко к игроку! ${distToOwner.toFixed(2)}px < ${MIN_DIST_TO_OWNER}px`);
             console.log(`[BOT-POS] 🛑 ИГНОРИРУЕМ обновление позиции (бот прилип к игроку)`);
             
-            // Отправляем владельцу корректную позицию бота
+            // ❌ НЕ ОБНОВЛЯЕМ ПОЗИЦИЮ!
+            // Отправляем владельцу корректную позицию бота (старую)
             const correctionData = {
                 type: 'bot_position_update',
                 bot_id: bot.id,
@@ -160,11 +161,32 @@ function botPosition(ws, data) {
         const dx = x - bot.x;
         const dy = y - bot.y;
         const moveDistance = Math.sqrt(dx * dx + dy * dy);
-        const MAX_MOVE_DISTANCE = 500; // пикселей за один шаг
+        const MAX_MOVE_DISTANCE = 300; // пикселей за один шаг
         
         if (moveDistance > MAX_MOVE_DISTANCE) {
             console.log(`[BOT-POS] ⚠️ Слишком большое перемещение! ${moveDistance.toFixed(2)}px > ${MAX_MOVE_DISTANCE}px`);
             console.log(`[BOT-POS] 🛑 ИГНОРИРУЕМ обновление позиции (попытка телепортации)`);
+            
+            const correctionData = {
+                type: 'bot_position_update',
+                bot_id: bot.id,
+                x: bot.x,
+                y: bot.y,
+                flip: bot.flip || false,
+                _correction: true
+            };
+            
+            if (ws && ws.readyState === 1) {
+                ws.send(JSON.stringify(correctionData));
+            }
+            return;
+        }
+        
+        // 🔥 5. ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Бот не должен прыгать (резкое изменение Y)
+        const dyJump = Math.abs(y - bot.y);
+        if (dyJump > 100) {
+            console.log(`[BOT-POS] ⚠️ Слишком большой прыжок! dy=${dyJump.toFixed(2)}px > 100px`);
+            console.log(`[BOT-POS] 🛑 ИГНОРИРУЕМ обновление позиции (попытка прыжка)`);
             
             const correctionData = {
                 type: 'bot_position_update',
