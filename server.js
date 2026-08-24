@@ -135,6 +135,9 @@ function botPosition(ws, data) {
 // ============================================================
 // 2. СОЗДАНИЕ БОТА
 // ============================================================
+// ============================================================
+// 2. СОЗДАНИЕ БОТА (ИСПРАВЛЕННАЯ)
+// ============================================================
 function botSpawn(ws, data) {
     console.log('[BOT-SPAWN] 🚀 Начало создания бота');
     console.log(`[BOT-SPAWN] 📥 Входящие данные: ${JSON.stringify(data)}`);
@@ -153,6 +156,92 @@ function botSpawn(ws, data) {
 
     console.log(`[BOT-SPAWN] 👤 Игрок: ${ownerId}, ник: ${p.nickname}, команда: ${p.team}`);
 
+    // Получаем данные бота (используем правильные имена полей)
+    const botId = String(data.bot_id || `bot_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`);
+    const x = Number(data.x || p.x);
+    const y = Number(data.y || p.y);
+    const team = Number(data.team || p.team);
+    const hp = Number(data.hp) || BOT_MAX_HP;
+
+    console.log(`[BOT-SPAWN] 📊 Данные бота: id=${botId}, x=${x}, y=${y}, team=${team}, hp=${hp}`);
+
+    // Проверяем лимит ботов
+    const playerBots = state.bots.filter(b => b.owner_id === ownerId && !b.isDead);
+    if (playerBots.length >= MAX_BOTS_PER_PLAYER) {
+        console.log(`[BOT-SPAWN] ❌ Лимит ботов для игрока ${ownerId}: ${playerBots.length}/${MAX_BOTS_PER_PLAYER}`);
+        send(ws, { type: 'error', message: `Достигнут лимит ботов (${MAX_BOTS_PER_PLAYER})` });
+        return;
+    }
+
+    // Проверяем, не существует ли уже такой бот
+    const existingBot = state.bots.find(b => b.id === botId);
+    if (existingBot) {
+        console.log(`[BOT-SPAWN] ⚠️ Бот уже существует: ${botId}, обновляем данные`);
+        existingBot.x = x;
+        existingBot.y = y;
+        existingBot.team = team;
+        existingBot.hp = hp;
+        existingBot.isDead = false;
+        
+        // Рассылаем обновление
+        const updateData = {
+            type: 'bot_spawn_sync',
+            bot: {
+                id: existingBot.id,
+                owner_id: existingBot.owner_id,
+                team: existingBot.team,
+                hp: existingBot.hp,
+                maxHp: existingBot.maxHp || BOT_MAX_HP,
+                x: existingBot.x,
+                y: existingBot.y,
+                flip: existingBot.flip || false
+            }
+        };
+        console.log(`[BOT-SPAWN] 📤 Обновление бота: ${JSON.stringify(updateData)}`);
+        broadcast(updateData);
+        return;
+    }
+
+    // Создаём бота в state
+    const bot = {
+        id: botId,
+        owner_id: ownerId,
+        team: team,
+        hp: hp,
+        maxHp: BOT_MAX_HP,
+        x: x,
+        y: y,
+        flip: false,
+        isDead: false,
+        spawnTime: Date.now(),
+        lastUpdate: Date.now()
+    };
+
+    state.bots.push(bot);
+    console.log(`[BOT-SPAWN] ✅ Бот добавлен в state: ${botId}`);
+    console.log(`[BOT-SPAWN] 📋 Всего ботов: ${state.bots.length}`);
+
+    // Рассылаем ВСЕМ о создании бота
+    const spawnData = {
+        type: 'bot_spawn_sync',
+        bot: {
+            id: bot.id,
+            owner_id: bot.owner_id,
+            team: bot.team,
+            hp: bot.hp,
+            maxHp: bot.maxHp,
+            x: bot.x,
+            y: bot.y,
+            flip: bot.flip
+        }
+    };
+    
+    console.log(`[BOT-SPAWN] 📤 Рассылка создания бота всем: ${JSON.stringify(spawnData)}`);
+    broadcast(spawnData);
+
+    console.log(`[BOT-SPAWN] ✅ Бот ${bot.id} успешно создан игроком ${ownerId}`);
+    logBotsState();
+}
     // Проверяем игру
     if (state.status !== 'playing') {
         console.log(`[BOT-SPAWN] ❌ Игра не началась: status=${state.status}`);
@@ -1157,9 +1246,6 @@ wss.on('connection', ws => {
 });
 
 // ============================================================
-// ROUTER
-// ============================================================
-// ============================================================
 // ROUTER (ИСПРАВЛЕННАЯ ВЕРСИЯ)
 // ============================================================
 function route(ws, data) {
@@ -1227,31 +1313,54 @@ function route(ws, data) {
     return;
   }
 
+   // ============================================================
+  // BOT HANDLERS - ДОБАВЛЯЕМ ВСЕ ТИПЫ
   // ============================================================
-  // BOT HANDLERS
-  // ============================================================
-  if (type === 'summon_bot') {
-    summonBot(ws, data);
+  if (type === 'bot_spawn') {
+    console.log('[SERVER] 🤖 Обработка bot_spawn');
+    botSpawn(ws, data);
+    return;
+  }
+
+  if (type === 'bot_position') {
+    console.log('[SERVER] 📍 Обработка bot_position');
+    botPosition(ws, data);
     return;
   }
 
   if (type === 'bot_damage') {
+    console.log('[SERVER] 💥 Обработка bot_damage');
     botDamage(ws, data);
     return;
   }
 
-  if (type === 'bot_position_update') {
-    botPositionUpdate(ws, data);
+  if (type === 'bot_destroy') {
+    console.log('[SERVER] 🗑️ Обработка bot_destroy');
+    botDestroy(ws, data);
     return;
   }
 
   if (type === 'bot_attack') {
+    console.log('[SERVER] ⚔️ Обработка bot_attack');
     botAttack(ws, data);
     return;
   }
 
   if (type === 'bot_state_update') {
+    console.log('[SERVER] 🔄 Обработка bot_state_update');
     botStateUpdate(ws, data);
+    return;
+  }
+
+  if (type === 'summon_bot') {
+    console.log('[SERVER] 🚀 Обработка summon_bot');
+    summonBot(ws, data);
+    return;
+  }
+
+  if (type === 'get_bots') {
+    console.log('[SERVER] 📋 Обработка get_bots');
+    getBotsSync(ws);
     return;
   }
 
