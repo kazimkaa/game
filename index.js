@@ -300,4 +300,678 @@ function spawnCreep() {
         direction: team === 1 ? 1 : -1
     };
 
-    state
+    state.creeps.push(creep);
+    state.nextCreepTeam = team === 1 ? 2 : 1;
+
+    syncManager.creepSync.syncCreepSpawn(creep);
+}
+
+function regeneratePlayers() {
+    if (state.status !== 'playing') return;
+
+    const now = Date.now();
+    players.forEach(p => {
+        if (p.isDead) return;
+        if (p.hp >= config.PLAYER_MAX_HP) {
+            p.hp = config.PLAYER_MAX_HP;
+            return;
+        }
+
+        const elapsed = now - Number(p.lastDamageTime || now);
+        if (elapsed < config.PLAYER_REGEN_DELAY) return;
+
+        const oldHp = p.hp;
+        p.hp = Math.min(config.PLAYER_MAX_HP, p.hp + config.PLAYER_REGEN_AMOUNT);
+
+        if (p.hp === oldHp) return;
+
+        syncManager.playerSync.syncPlayerDamage(p.id, p.hp);
+    });
+}
+
+function playerDamage(_, data) {
+    if (state.status !== 'playing') return;
+
+    const id = String(data.target_id || '');
+    const p = players.get(id);
+    if (!p || p.isDead) return;
+
+    const damage = Math.max(0, Number(data.damage) || 10);
+
+    p.hp = Math.max(0, p.hp - damage);
+    p.lastDamageTime = Date.now();
+
+    syncManager.playerSync.syncPlayerDamage(p.id, p.hp);
+
+    if (p.hp <= 0) {
+        p.hp = 0;
+        p.isDead = true;
+
+        setTimeout(() => {
+            const currentPlayer = players.get(p.id);
+            if (!currentPlayer) return;
+            if (state.status !== 'playing') return;
+            if (!currentPlayer.isDead) return;
+            respawn(currentPlayer.id);
+        }, 3000);
+    }
+}
+
+function respawn(id) {
+    const p = players.get(String(id || ''));
+    if (!p) return;
+    if (state.status !== 'playing') return;
+    if (!p.isDead) return;
+
+    const position = spawn(p.team, true);
+
+    p.hp = config.PLAYER_MAX_HP;
+    p.isDead = false;
+    p.x = position.x;
+    p.y = position.y;
+    p.flip = false;
+    p.lastDamageTime = Date.now();
+
+    syncManager.playerSync.syncPlayerRespawn(p.id, p.x, p.y, p.hp);
+}
+
+function endGame(winner) {
+    if (state.status !== 'playing') return;
+
+    state.status = 'finished';
+    state.winner = winner;
+    state.timer = 0;
+
+    clearInterval(gameTimer);
+    clearInterval(playerCheckTimer);
+    clearInterval(creepTimer);
+    clearInterval(playerRegenTimer);
+
+    gameTimer = null;
+    playerCheckTimer = null;
+    creepTimer = null;
+    playerRegenTimer = null;
+
+    // ОСТАНАВЛИВАЕМ СИНХРОНИЗАЦИИ
+    syncManager.stopAll();
+
+    broadcast(wss, {
+        type: 'countdown_update',
+        time: 0
+    });
+
+    broadcast(wss, {
+        type: 'game_over',
+        winner_team: winner
+    });
+
+    logger.game(`ИГРА ЗАКОНЧЕНА | WINNER: ${winner}`);
+
+    setTimeout(resetGame, 5000);
+}
+
+function resetGame() {
+    state.status = 'lobby';
+    state.countdown = config.COUNTDOWN_TIME;
+    state.timer = config.GAME_TIME;
+    state.winner = 0;
+    state.blueTowerHp = 1000;
+    state.redTowerHp = 1000;
+    state.blueBarracksHp = 500;
+    state.redBarracksHp = 500;
+    state.blueBarracksDestroyed = false;
+    state.redBarracksDestroyed = false;
+    state.creeps = [];
+    state.bots = [];
+    state.nextCreepTeam = 1;
+    state.nextCreepId = 1;
+    state.animationTick = 0;
+    state.animations = [];
+
+    players.forEach(p => {
+        const position = spawn(p.team, true);
+        Object.assign(p, {
+            inGame: false,
+            hp: config.PLAYER_MAX_HP,
+            isDead: false,
+            x: position.x,
+            y: position.y,
+            flip: false,
+            lastDamageTime: Date.now()
+        });
+    });
+
+    broadcast(wss, {
+        type: 'reset_lobby'
+    });
+
+    broadcastPlayerList();
+    logger.game('Лобби сброшено');
+}
+
+function checkPlayers() {
+    if (state.status !== 'playing') return;
+
+    if (players.size < config.MIN_PLAYERS) {
+        const remaining = players.size > 0 ? [...players.values()][0] : null;
+        endGame(remaining ? remaining.team : 0);
+    }
+}
+
+function disconnect(ws) {
+    const id = ws.playerData?.id;
+    if (!id) return;
+    if (!players.has(id)) return;
+
+    if (state.bots) {
+        state.bots = state.bots.filter(b => b.owner_id !== id);
+    }
+    players.delete(id);
+
+    logger.network(`Покинул: ${id} | players=${players.size}`);
+
+    syncManager.playerSync.syncPlayerLeft(id);
+    broadcastPlayerList();
+
+    if (state.bots && state.bots.length > 0) {
+        syncManager.botSync.syncAll();
+    }
+
+    if (state.status === 'countdown' && (players.size < config.MIN_PLAYERS || readyCount(players) < config.MIN_PLAYERS)) {
+        cancelCountdown();
+    }
+
+    if (state.status === 'playing') {
+        checkPlayers();
+    }
+}
+
+// ============================================================
+// BOT FUNCTIONS (using syncManager)
+// ============================================================
+
+function botSpawn(ws, data) {
+    const ownerId = ws.playerData?.id;
+    if (!ownerId) return;
+
+    const p = players.get(ownerId);
+    if (!p) return;
+
+    if (state.status !== 'playing') {
+        send(ws, { type: 'error', message: 'Игра не началась' });
+        return;
+    }
+
+    const botId = String(data.bot_id || `bot_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`);
+    const x = Number(data.x || p.x);
+    const y = Number(data.y || p.y);
+    const team = Number(data.team || p.team);
+    const hp = Number(data.hp) || config.BOT_MAX_HP;
+
+    const playerBots = state.bots.filter(b => b.owner_id === ownerId && !b.isDead);
+    if (playerBots.length >= config.MAX_BOTS_PER_PLAYER) {
+        send(ws, { type: 'error', message: `Достигнут лимит ботов (${config.MAX_BOTS_PER_PLAYER})` });
+        return;
+    }
+
+    const bot = {
+        id: botId,
+        owner_id: ownerId,
+        team: team,
+        hp: hp,
+        maxHp: config.BOT_MAX_HP,
+        x: x,
+        y: y,
+        flip: false,
+        isDead: false,
+        spawnTime: Date.now(),
+        lastUpdate: Date.now()
+    };
+
+    state.bots.push(bot);
+    syncManager.botSync.syncBotSpawn(bot);
+}
+
+function botPosition(ws, data) {
+    const ownerId = ws.playerData?.id;
+    if (!ownerId) return;
+
+    const botId = String(data.bot_id || '');
+    const x = Number(data.x);
+    const y = Number(data.y);
+    const flip = !!data.flip;
+
+    const success = syncManager.botSync.updateBotPosition(botId, x, y, flip, ownerId);
+    
+    if (!success) {
+        // Отправляем корректирующую позицию
+        const bot = state.bots.find(b => b.id === botId);
+        if (bot) {
+            send(ws, {
+                type: 'bot_position_update',
+                bot_id: bot.id,
+                x: bot.x,
+                y: bot.y,
+                flip: bot.flip || false,
+                _correction: true
+            });
+        }
+    }
+}
+
+function botDamage(ws, data) {
+    const botId = String(data.bot_id || '');
+    const damage = Number(data.damage) || 10;
+    const attackerId = String(data.attacker_id || '');
+
+    syncManager.botSync.damageBot(botId, damage, attackerId);
+}
+
+function botDestroy(ws, data) {
+    const ownerId = ws.playerData?.id;
+    if (!ownerId) return;
+
+    const botId = String(data.bot_id || '');
+    const bot = state.bots.find(b => b.id === botId);
+    if (!bot || bot.owner_id !== ownerId) return;
+
+    syncManager.botSync.destroyBot(botId, 'manual');
+}
+
+// ============================================================
+// ROUTER
+// ============================================================
+
+function route(ws, data) {
+    if (!data || typeof data !== 'object') return;
+
+    const type = data.type;
+
+    if (type === 'ping') {
+        send(ws, { type: 'pong' });
+        return;
+    }
+
+    if (type === 'join') {
+        join(ws, data);
+        return;
+    }
+
+    if (type === 'move') {
+        move(ws, data);
+        return;
+    }
+
+    if (type === 'chat') {
+        chat(ws, data);
+        return;
+    }
+
+    if (type === 'level_ready') {
+        level_ready(ws);
+        return;
+    }
+
+    if (type === 'force_start') {
+        force_start(ws);
+        return;
+    }
+
+    if (type === 'player_damage') {
+        playerDamage(ws, data);
+        return;
+    }
+
+    if (type === 'town_damage') {
+        towerDamage(ws, data);
+        return;
+    }
+
+    if (type === 'barracks_damage') {
+        barracksDamage(ws, data);
+        return;
+    }
+
+    if (type === 'creep_damage') {
+        creepDamage(ws, data);
+        return;
+    }
+
+    if (type === 'creep_position_update') {
+        creepPositionUpdate(ws, data);
+        return;
+    }
+
+    if (type === 'respawn') {
+        respawn(String(data.id || ''));
+        return;
+    }
+
+    // BOT HANDLERS
+    if (type === 'bot_spawn') {
+        botSpawn(ws, data);
+        return;
+    }
+
+    if (type === 'bot_position') {
+        botPosition(ws, data);
+        return;
+    }
+
+    if (type === 'bot_damage') {
+        botDamage(ws, data);
+        return;
+    }
+
+    if (type === 'bot_destroy') {
+        botDestroy(ws, data);
+        return;
+    }
+
+    if (type === 'summon_bot') {
+        botSpawn(ws, data);
+        return;
+    }
+
+    if (type === 'get_bots') {
+        syncManager.botSync.syncToClient(ws);
+        return;
+    }
+
+    if (type === 'animation_sync') {
+        const animType = String(data.animation_type || 'custom');
+        const animData = data.animation_data || {};
+        const sourceId = String(data.source_id || ws.playerData?.id || '');
+        const targetId = String(data.target_id || '');
+        syncManager.animationSync.syncAnimation({ type: animType, data: animData }, sourceId, targetId);
+        return;
+    }
+
+    if (type === 'animation_batch') {
+        const animations = data.animations || [];
+        syncManager.animationSync.syncAnimationBatch(animations);
+        return;
+    }
+
+    logger.warn(`Неизвестный тип: ${type}`);
+}
+
+// ============================================================
+// JOIN AND OTHER ROUTING FUNCTIONS
+// ============================================================
+
+function join(ws, data) {
+    const id = String(data.id || '').trim();
+
+    if (!id) {
+        send(ws, { type: 'error', message: 'ID отсутствует' });
+        return;
+    }
+
+    if (state.status === 'playing' || state.status === 'countdown') {
+        send(ws, { type: 'error', message: 'Игра уже началась' });
+        return;
+    }
+
+    if (players.size >= config.MAX_PLAYERS && !players.has(id)) {
+        send(ws, { type: 'error', message: 'Лобби заполнено' });
+        return;
+    }
+
+    if (players.has(id)) {
+        send(ws, { type: 'error', message: 'ID занят' });
+        return;
+    }
+
+    let team1 = 0;
+    let team2 = 0;
+
+    players.forEach(player => {
+        if (player.team === 1) team1++;
+        if (player.team === 2) team2++;
+    });
+
+    let team = 1;
+    if (team1 > team2) team = 2;
+
+    const character = Number(data.character) === 2 ? 2 : 1;
+    const position = spawn(team);
+
+    const player = {
+        id: id,
+        nickname: String(data.nickname || 'Player').slice(0, 32),
+        character: character,
+        x: position.x,
+        y: position.y,
+        flip: false,
+        team: team,
+        hp: config.PLAYER_MAX_HP,
+        isDead: false,
+        inGame: false,
+        lastDamageTime: Date.now()
+    };
+
+    players.set(id, player);
+    ws.playerData = player;
+
+    logger.network(`${id} зашел | Team: ${team} | Character: ${character}`);
+
+    send(ws, {
+        type: 'join_success',
+        id: id,
+        team: team,
+        x: player.x,
+        y: player.y,
+        character: player.character,
+        hp: player.hp
+    });
+
+    // Отправляем полную синхронизацию новому игроку
+    syncManager.syncAllToClient(ws);
+    sendPlayerList(ws);
+
+    // Оповещаем всех о новом игроке
+    syncManager.playerSync.syncPlayerJoined(player, ws);
+    broadcastPlayerList();
+
+    logger.network(`Новый игрок: ${id} | Всего: ${players.size}`);
+}
+
+function level_ready(ws) {
+    const id = ws.playerData?.id;
+    if (!id) return;
+
+    const p = players.get(id);
+    if (!p) return;
+
+    if (state.status === 'playing') return;
+
+    p.inGame = true;
+    logger.game(`${id} готов | ready=${readyCount(players)} players=${players.size}`);
+    checkAllReady();
+}
+
+function chat(ws, data) {
+    const id = ws.playerData?.id;
+    const p = players.get(id);
+    if (!p) return;
+
+    const message = String(data.message || '').trim();
+    if (!message) return;
+
+    broadcast(wss, {
+        type: 'chat',
+        sender: p.nickname,
+        message: message.slice(0, 300)
+    });
+}
+
+function force_start(ws) {
+    if (players.size < config.MIN_PLAYERS) {
+        send(ws, {
+            type: 'chat',
+            sender: 'СИСТЕМА',
+            message: 'Нужно минимум 2 игрока.'
+        });
+        return;
+    }
+
+    players.forEach(p => {
+        p.inGame = true;
+    });
+
+    startCountdown();
+}
+
+function towerDamage(_, data) {
+    if (state.status !== 'playing') return;
+
+    const blue = Number(data.town_id) === 1;
+    const key = blue ? 'blueTowerHp' : 'redTowerHp';
+    const damage = Math.max(0, Number(data.damage) || 10);
+
+    state[key] = Math.max(0, state[key] - damage);
+
+    broadcast(wss, {
+        type: 'tower_damage',
+        town_id: blue ? 1 : 2,
+        new_hp: state[key]
+    });
+
+    if (state[key] <= 0) {
+        endGame(blue ? 2 : 1);
+    }
+}
+
+function barracksDamage(_, data) {
+    if (state.status !== 'playing') return;
+
+    const blue = Number(data.barracks_id) === 1;
+    const hpKey = blue ? 'blueBarracksHp' : 'redBarracksHp';
+    const deadKey = blue ? 'blueBarracksDestroyed' : 'redBarracksDestroyed';
+    const damage = Math.max(0, Number(data.damage) || 10);
+
+    state[hpKey] = Math.max(0, state[hpKey] - damage);
+
+    broadcast(wss, {
+        type: 'barracks_damage',
+        barracks_id: blue ? 1 : 2,
+        new_hp: state[hpKey]
+    });
+
+    if (state[hpKey] <= 0 && !state[deadKey]) {
+        state[deadKey] = true;
+
+        broadcast(wss, {
+            type: 'barracks_destroyed',
+            barracks_id: blue ? 1 : 2
+        });
+    }
+}
+
+function creepDamage(_, data) {
+    if (state.status !== 'playing') return;
+
+    const id = String(data.id || '');
+    const creep = state.creeps.find(item => item.id === id);
+    if (!creep) return;
+
+    const damage = Math.max(0, Number(data.damage) || 10);
+    creep.hp = Math.max(0, creep.hp - damage);
+
+    syncManager.creepSync.syncCreepDamage(creep.id, creep.hp);
+
+    if (creep.hp <= 0) {
+        syncManager.creepSync.syncCreepDestroy(creep.id);
+        const index = state.creeps.findIndex(c => c.id === creep.id);
+        if (index !== -1) {
+            state.creeps.splice(index, 1);
+        }
+    }
+}
+
+function creepPositionUpdate(_, data) {
+    if (state.status !== 'playing') return;
+
+    const id = String(data.id || '');
+    const creep = state.creeps.find(item => item.id === id);
+    if (!creep) return;
+
+    if (data.x !== undefined) creep.x = Number(data.x);
+    if (data.y !== undefined) creep.y = Number(data.y);
+    if (data.direction !== undefined) creep.direction = Number(data.direction);
+
+    syncManager.creepSync.syncCreepPosition(creep.id, creep.x, creep.y, creep.direction);
+}
+
+// ============================================================
+// WEBSOCKET CONNECTION
+// ============================================================
+
+wss.on('connection', ws => {
+    logger.network('Новое WebSocket подключение');
+
+    ws.playerData = {
+        id: '',
+        nickname: 'Player',
+        character: 1,
+        x: 0,
+        y: config.GROUND_Y,
+        flip: false,
+        team: 0,
+        hp: config.PLAYER_MAX_HP,
+        isDead: false,
+        inGame: false,
+        lastDamageTime: Date.now()
+    };
+
+    ws.on('message', raw => {
+        try {
+            const text = raw.toString();
+            if (!text) return;
+
+            const data = JSON.parse(text);
+            route(ws, data);
+        } catch (error) {
+            logger.error('Ошибка обработки сообщения:', error.message);
+            send(ws, {
+                type: 'error',
+                message: 'Некорректный JSON'
+            });
+        }
+    });
+
+    ws.on('close', () => {
+        disconnect(ws);
+    });
+
+    ws.on('error', error => {
+        logger.error('WebSocket ошибка:', error.message);
+    });
+});
+
+// ============================================================
+// PROCESS EXIT
+// ============================================================
+
+process.on('SIGINT', () => {
+    logger.info('Остановка сервера...');
+    syncManager.stopAll();
+    clearInterval(countdownTimer);
+    clearInterval(gameTimer);
+    clearInterval(playerCheckTimer);
+    clearInterval(creepTimer);
+    clearInterval(playerRegenTimer);
+    server.close(() => process.exit(0));
+});
+
+process.on('SIGTERM', () => {
+    logger.info('SIGTERM получен');
+    syncManager.stopAll();
+    clearInterval(countdownTimer);
+    clearInterval(gameTimer);
+    clearInterval(playerCheckTimer);
+    clearInterval(creepTimer);
+    clearInterval(playerRegenTimer);
+    server.close(() => process.exit(0));
+});
