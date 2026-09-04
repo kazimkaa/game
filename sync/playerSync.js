@@ -10,13 +10,8 @@ class PlayerSync {
         this.isRunning = false;
     }
 
-    /**
-     * Запускает периодическую синхронизацию игроков
-     * @param {number} interval - интервал в мс (по умолчанию 100)
-     */
     start(interval = 100) {
         if (this.isRunning) return;
-        
         this.isRunning = true;
         console.log('[PlayerSync] 🔄 Запущена синхронизация игроков');
         
@@ -25,9 +20,6 @@ class PlayerSync {
         }, interval);
     }
 
-    /**
-     * Останавливает синхронизацию
-     */
     stop() {
         this.isRunning = false;
         if (this.syncInterval) {
@@ -37,31 +29,34 @@ class PlayerSync {
         }
     }
 
-    /**
-     * Отправляет полный список игроков всем
-     */
     syncAll() {
         if (this.state.status !== 'playing' && this.state.status !== 'lobby') return;
         
+        const players = playersObject(this.players);
+        const count = Object.keys(players).length;
+        
+        if (count > 0) {
+            console.log(`[PlayerSync] 📤 Отправка синхронизации ${count} игроков`);
+        }
+        
         broadcast(this.wss, {
             type: 'players_sync',
-            players: playersObject(this.players)
+            players: players
         });
     }
 
-    /**
-     * Отправляет полный список игроков конкретному клиенту
-     */
     syncToClient(ws) {
+        const players = playersObject(this.players);
+        const count = Object.keys(players).length;
+        
+        console.log(`[PlayerSync] 📤 Отправка ${count} игроков клиенту`);
+        
         send(ws, {
             type: 'players_sync',
-            players: playersObject(this.players)
+            players: players
         });
     }
 
-    /**
-     * Отправляет обновление позиции игрока всем
-     */
     syncPlayerMove(playerId, x, y, flip) {
         broadcast(this.wss, {
             type: 'player_moved',
@@ -72,9 +67,6 @@ class PlayerSync {
         });
     }
 
-    /**
-     * Отправляет обновление HP игрока всем
-     */
     syncPlayerDamage(playerId, newHp) {
         broadcast(this.wss, {
             type: 'player_damage',
@@ -83,9 +75,6 @@ class PlayerSync {
         });
     }
 
-    /**
-     * Отправляет событие респавна всем
-     */
     syncPlayerRespawn(playerId, x, y, hp) {
         broadcast(this.wss, {
             type: 'respawn',
@@ -96,9 +85,6 @@ class PlayerSync {
         });
     }
 
-    /**
-     * Отправляет событие выхода игрока всем
-     */
     syncPlayerLeft(playerId) {
         broadcast(this.wss, {
             type: 'player_left',
@@ -106,9 +92,6 @@ class PlayerSync {
         });
     }
 
-    /**
-     * Отправляет событие входа игрока всем (кроме отправителя)
-     */
     syncPlayerJoined(player, excludeWs = null) {
         broadcast(this.wss, {
             type: 'player_joined',
