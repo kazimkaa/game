@@ -1,5 +1,10 @@
-// server.js
-const index = require('./index.js');
+// server.js - Точка входа для Render
+console.log('🚀 Запуск игрового сервера через index.js...');
 
-// Просто перенаправляем на index.js
-module.exports = index;
+// Импортируем основной сервер
+require('./index.js');
+
+console.log('✅ Сервер успешно запущен');
+console.log('==========================================');
+console.log('🌐 Ожидание подключений...');
+console.log('==========================================');
